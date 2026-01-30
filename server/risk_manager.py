@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import yaml
+import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
@@ -64,6 +65,22 @@ class CacheConnector:
         """设置缓存权益"""
         raise NotImplementedError
 
+    async def get_portfolio_snapshot(self, user_id: str) -> Optional[PortfolioSnapshot]:
+        """获取投资组合快照缓存"""
+        raise NotImplementedError
+
+    async def set_portfolio_snapshot(self, user_id: str, snapshot: PortfolioSnapshot, ttl: int = 30) -> None:
+        """设置投资组合快照缓存"""
+        raise NotImplementedError
+
+    async def get_exchange_balances(self, user_id: str) -> Optional[Dict[str, float]]:
+        """获取交易所余额缓存"""
+        raise NotImplementedError
+
+    async def set_exchange_balances(self, user_id: str, balances: Dict[str, float], ttl: int = 30) -> None:
+        """设置交易所余额缓存"""
+        raise NotImplementedError
+
 
 class RiskManager:
     """全局风险管理器"""
@@ -97,16 +114,19 @@ class RiskManager:
         self.max_drawdown_cb = MaxDrawdownCircuitBreaker(
             self.config.get("max_drawdown", {}),
             db_connector,
+            cache_connector,
             user_id
         )
         self.exposure_limiter = ExposureLimiter(
             self.config.get("exposure", {}),
             db_connector,
+            cache_connector,
             user_id
         )
         self.rebalancer = Rebalancer(
             self.config.get("rebalancer", {}),
             db_connector,
+            cache_connector,
             user_id
         )
         self.funding_rate_monitor = FundingRateMonitor(
@@ -252,6 +272,7 @@ class MaxDrawdownCircuitBreaker:
         self,
         cfg: Dict[str, Any],
         db_connector: Optional[DatabaseConnector] = None,
+        cache_connector: Optional[CacheConnector] = None,
         user_id: str = "default"
     ):
         self.max_drawdown = cfg.get("max_drawdown", 0.20)  # 20% 回撤阈值
@@ -259,6 +280,7 @@ class MaxDrawdownCircuitBreaker:
         self.current_equity = 0.0
         self.current_drawdown = 0.0
         self.db = db_connector
+        self.cache = cache_connector
         self.user_id = user_id
 
     async def check(self) -> bool:
@@ -291,9 +313,22 @@ class MaxDrawdownCircuitBreaker:
 
     async def _fetch_equity(self) -> float:
         """获取当前权益"""
+        if self.cache:
+            try:
+                cached = await self.cache.get_current_equity(self.user_id)
+                if cached is not None:
+                    return cached
+            except Exception:
+                pass
         if self.db:
             try:
-                return await self.db.get_user_equity(self.user_id)
+                equity = await self.db.get_user_equity(self.user_id)
+                if self.cache:
+                    try:
+                        await self.cache.set_current_equity(self.user_id, equity, ttl=60)
+                    except Exception:
+                        pass
+                return equity
             except Exception as e:
                 logger.error(f"权益查询失败: {e}")
         return 100000.0
@@ -306,12 +341,14 @@ class ExposureLimiter:
         self,
         cfg: Dict[str, Any],
         db_connector: Optional[DatabaseConnector] = None,
+        cache_connector: Optional[CacheConnector] = None,
         user_id: str = "default"
     ):
         self.limit = cfg.get("limit", 0.30)  # 单币种敞口上限 (30%)
         self.total_limit = cfg.get("total_limit", 0.80)  # 总敞口上限 (80%)
         self.current_exposure = 0.0
         self.db = db_connector
+        self.cache = cache_connector
         self.user_id = user_id
 
     async def check(self) -> bool:
@@ -354,9 +391,22 @@ class ExposureLimiter:
 
     async def _fetch_portfolio(self) -> Optional[PortfolioSnapshot]:
         """获取投资组合快照"""
+        if self.cache:
+            try:
+                cached = await self.cache.get_portfolio_snapshot(self.user_id)
+                if cached:
+                    return cached
+            except Exception:
+                pass
         if self.db:
             try:
-                return await self.db.get_user_portfolio(self.user_id)
+                snapshot = await self.db.get_user_portfolio(self.user_id)
+                if self.cache:
+                    try:
+                        await self.cache.set_portfolio_snapshot(self.user_id, snapshot, ttl=30)
+                    except Exception:
+                        pass
+                return snapshot
             except Exception as e:
                 logger.error(f"投资组合查询失败: {e}")
         return None
@@ -369,12 +419,14 @@ class Rebalancer:
         self,
         cfg: Dict[str, Any],
         db_connector: Optional[DatabaseConnector] = None,
+        cache_connector: Optional[CacheConnector] = None,
         user_id: str = "default"
     ):
         self.enabled = cfg.get("enabled", False)
         self.target_allocation = cfg.get("target_allocation", {})  # 目标配置
         self.threshold = cfg.get("threshold", 0.05)  # 偏离阈值 (5%)
         self.db = db_connector
+        self.cache = cache_connector
         self.user_id = user_id
 
     async def check(self) -> bool:
@@ -418,18 +470,44 @@ class Rebalancer:
 
     async def _fetch_portfolio(self) -> Optional[PortfolioSnapshot]:
         """获取投资组合"""
+        if self.cache:
+            try:
+                cached = await self.cache.get_portfolio_snapshot(self.user_id)
+                if cached:
+                    return cached
+            except Exception:
+                pass
         if self.db:
             try:
-                return await self.db.get_user_portfolio(self.user_id)
+                snapshot = await self.db.get_user_portfolio(self.user_id)
+                if self.cache:
+                    try:
+                        await self.cache.set_portfolio_snapshot(self.user_id, snapshot, ttl=30)
+                    except Exception:
+                        pass
+                return snapshot
             except Exception as e:
                 logger.error(f"投资组合查询失败: {e}")
         return None
 
     async def _fetch_exchange_balances(self) -> Optional[Dict[str, float]]:
         """获取各交易所余额"""
+        if self.cache:
+            try:
+                cached = await self.cache.get_exchange_balances(self.user_id)
+                if cached is not None:
+                    return cached
+            except Exception:
+                pass
         if self.db:
             try:
-                return await self.db.get_exchange_balances(self.user_id)
+                balances = await self.db.get_exchange_balances(self.user_id)
+                if self.cache:
+                    try:
+                        await self.cache.set_exchange_balances(self.user_id, balances, ttl=30)
+                    except Exception:
+                        pass
+                return balances
             except Exception as e:
                 logger.error(f"交易所余额查询失败: {e}")
         return None
@@ -721,11 +799,17 @@ class PostgresRiskDatabaseConnector(DatabaseConnector):
 class RedisRiskCacheConnector(CacheConnector):
     """Redis 风险缓存连接器"""
 
-    def __init__(self, key_prefix: str = "risk:equity") -> None:
+    def __init__(self, key_prefix: str = "risk") -> None:
         self.key_prefix = key_prefix
 
     def _make_key(self, user_id: str) -> str:
-        return f"{self.key_prefix}:{user_id}"
+        return f"{self.key_prefix}:equity:{user_id}"
+
+    def _make_portfolio_key(self, user_id: str) -> str:
+        return f"{self.key_prefix}:portfolio:{user_id}"
+
+    def _make_balances_key(self, user_id: str) -> str:
+        return f"{self.key_prefix}:balances:{user_id}"
 
     async def get_current_equity(self, user_id: str) -> Optional[float]:
         try:
@@ -744,3 +828,59 @@ class RedisRiskCacheConnector(CacheConnector):
             await redis.set(self._make_key(user_id), float(equity), ex=ttl)
         except Exception as e:
             logger.warning(f"设置缓存权益失败: {e}")
+
+    async def get_portfolio_snapshot(self, user_id: str) -> Optional[PortfolioSnapshot]:
+        try:
+            redis = await get_redis()
+            value = await redis.get(self._make_portfolio_key(user_id))
+            if not value:
+                return None
+            data = json.loads(value)
+            return PortfolioSnapshot(
+                total_equity=float(data.get("total_equity", 0.0)),
+                cash_balance=float(data.get("cash_balance", 0.0)),
+                position_value=float(data.get("position_value", 0.0)),
+                positions=data.get("positions") or {},
+                timestamp=datetime.fromisoformat(data.get("timestamp")) if data.get("timestamp") else datetime.now(),
+            )
+        except Exception as e:
+            logger.warning(f"获取投资组合缓存失败: {e}")
+            return None
+
+    async def set_portfolio_snapshot(self, user_id: str, snapshot: PortfolioSnapshot, ttl: int = 30) -> None:
+        try:
+            redis = await get_redis()
+            payload = json.dumps(
+                {
+                    "total_equity": snapshot.total_equity,
+                    "cash_balance": snapshot.cash_balance,
+                    "position_value": snapshot.position_value,
+                    "positions": snapshot.positions,
+                    "timestamp": snapshot.timestamp.isoformat(),
+                },
+                ensure_ascii=False,
+            )
+            await redis.set(self._make_portfolio_key(user_id), payload, ex=ttl)
+        except Exception as e:
+            logger.warning(f"设置投资组合缓存失败: {e}")
+
+    async def get_exchange_balances(self, user_id: str) -> Optional[Dict[str, float]]:
+        try:
+            redis = await get_redis()
+            value = await redis.get(self._make_balances_key(user_id))
+            if not value:
+                return None
+            data = json.loads(value)
+            if isinstance(data, dict):
+                return {k: float(v) for k, v in data.items()}
+        except Exception as e:
+            logger.warning(f"获取交易所余额缓存失败: {e}")
+        return None
+
+    async def set_exchange_balances(self, user_id: str, balances: Dict[str, float], ttl: int = 30) -> None:
+        try:
+            redis = await get_redis()
+            payload = json.dumps({k: float(v) for k, v in balances.items()}, ensure_ascii=False)
+            await redis.set(self._make_balances_key(user_id), payload, ex=ttl)
+        except Exception as e:
+            logger.warning(f"设置交易所余额缓存失败: {e}")

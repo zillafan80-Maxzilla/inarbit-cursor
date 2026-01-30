@@ -50,7 +50,7 @@ description: inarbit 高频交易系统重构任务清单
 
 ### 阶段 4: 风控闭环 🔄
 
-- [ ] RiskManager 数据获取与缓存实现完备
+- [x] RiskManager 数据获取与缓存实现完备
 - [ ] 风控规则与阈值可配置化
 - [ ] panic/reset/reload_keys 流程验证
 
@@ -268,3 +268,4 @@ cd engine && cargo build --release
 - OMS 闭环：orders=5、fills=5；PNL summary keys=avg_profit/total_orders/total_profit/trading_mode/win_rate
 - OMS 对账健壮性：plan reconcile/refresh/cancel 全部 success；order refresh/cancel success（order_id=bfb91d27-c77b-4880-9e88-cd17ee51484b）
 - WS 订单字段：收到 account_type/exchange_id/leg_id/plan_id/order_type/price/quantity/symbol/side 等，detail 字段齐全
+- 风控数据缓存：RiskManager/Exposure/Rebalancer 增加 portfolio/balances 缓存；risk/status 返回 keys=drawdown/exposure/total_equity
