@@ -43,7 +43,7 @@ description: inarbit 高频交易系统重构任务清单
 
 ### 阶段 3: OMS 执行闭环 🔄
 
-- [ ] 执行计划创建与状态回写
+- [x] 执行计划创建与状态回写
 - [ ] 订单/成交/PNL 数据闭环
 - [ ] OMS 对账流程与接口健壮性
 - [ ] WS 订单推送字段一致性检查
@@ -264,3 +264,4 @@ cd engine && cargo build --release
 - 机会产出稳定性：5 轮采样 `metrics_tri=0`、`metrics_cc=9~12`；API 列表 `tri=0/cc=0`（与 metrics 差异，需后续核对存储上限/刷新节奏）
 - 决策约束验证：constraints/effective min_profit_rate=0.001、max_positions=5；auto 未设置；3 轮决策数量稳定为 1
 - metrics 核对：metrics opp/decisions 与 redis 一致（tri=0/cc=11/decisions=1）；constraints min_profit_rate=0.001；market_regime 为空（需确认刷新触发）
+- OMS 计划验证：execute_latest 成功；plan_status=completed；legs=5（plan_id=cc282874-d36b-4873-8b19-e78d6d73ab85）
