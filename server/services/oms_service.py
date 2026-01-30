@@ -127,6 +127,7 @@ class OmsService:
         idempotency_key: Optional[str] = None,
         limit: int = 1,
     ) -> OmsExecutionResult:
+        start_ts = time.monotonic()
         if trading_mode not in {"paper", "live"}:
             raise ValueError("invalid trading_mode")
 
@@ -153,6 +154,13 @@ class OmsService:
             risk_manager = RiskManager(user_id=str(user_id))
             allowed = await risk_manager.check()
             if not allowed:
+                await self._publish_alert(
+                    user_id=str(user_id),
+                    category="risk",
+                    message="risk check failed",
+                    payload={"trading_mode": trading_mode},
+                    level="WARN",
+                )
                 raise PermissionError("risk check failed")
 
         plan_kind = "basis" if strategy_type == "cashcarry" else ("triangle" if strategy_type == "triangular" else "unknown")
@@ -225,6 +233,14 @@ class OmsService:
 
             terminal_now = all(_is_terminal((o or {}).get("status")) for o in orders_now)
             rejected_now = any(((o or {}).get("status") == "rejected") for o in orders_now)
+            if rejected_now:
+                await self._publish_alert(
+                    user_id=str(user_id),
+                    category="order_rejected",
+                    message="execution includes rejected orders",
+                    payload={"plan_id": str(plan_id), "trading_mode": trading_mode},
+                    level="WARN",
+                )
 
             poll_summary: Optional[dict[str, Any]] = None
             if trading_mode == "live" and post_poll_enabled and (not terminal_now) and post_poll_max_rounds > 0:
@@ -409,6 +425,21 @@ class OmsService:
                 await self._set_execution_plan_legs(plan_id=plan_id, trading_mode=trading_mode, legs=legs_payload)
             except Exception:
                 pass
+            try:
+                await self._publish_alert(
+                    user_id=str(user_id),
+                    category="order_failure",
+                    message="execution failed",
+                    payload={
+                        "plan_id": str(plan_id),
+                        "opportunity_id": str(opportunity_id) if opportunity_id else None,
+                        "trading_mode": trading_mode,
+                        "error": str(e),
+                    },
+                    level="ERROR",
+                )
+            except Exception:
+                pass
             await self._update_execution_plan(plan_id=plan_id, trading_mode=trading_mode, status="failed", error_message=str(e))
             raise
 
@@ -424,6 +455,24 @@ class OmsService:
                 ex=max(10, ttl),
             )
 
+        elapsed_ms = (time.monotonic() - start_ts) * 1000.0
+        try:
+            threshold_ms = float(os.getenv("OMS_EXECUTION_SLA_MS", "2000").strip() or "2000")
+        except Exception:
+            threshold_ms = 2000.0
+        if elapsed_ms > threshold_ms:
+            await self._publish_alert(
+                user_id=str(user_id),
+                category="latency",
+                message="execution latency exceeded threshold",
+                payload={
+                    "elapsed_ms": round(elapsed_ms, 2),
+                    "threshold_ms": threshold_ms,
+                    "trading_mode": trading_mode,
+                },
+                level="WARN",
+            )
+
         return result
 
     async def _publish_log(self, *, user_id: str, level: str, message: str) -> None:
@@ -437,6 +486,34 @@ class OmsService:
                     "message": message,
                 },
                 ensure_ascii=False,
+            ),
+        )
+
+    async def _publish_alert(
+        self,
+        *,
+        user_id: str,
+        category: str,
+        message: str,
+        payload: Optional[dict[str, Any]] = None,
+        level: str = "WARN",
+    ) -> None:
+        if os.getenv("OMS_ALERTS_ENABLED", "1").strip() in {"0", "false", "False"}:
+            return
+        redis = await get_redis()
+        await redis.publish(
+            f"alert:{user_id}",
+            json.dumps(
+                {
+                    "level": level,
+                    "source": "oms",
+                    "category": category,
+                    "message": message,
+                    "payload": payload or {},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                ensure_ascii=False,
+                default=str,
             ),
         )
 
