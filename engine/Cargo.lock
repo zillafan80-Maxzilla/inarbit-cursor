@@ -1069,6 +1069,7 @@ dependencies = [
  "config",
  "dotenv",
  "futures-util",
+ "lazy_static",
  "redis",
  "reqwest",
  "ring",

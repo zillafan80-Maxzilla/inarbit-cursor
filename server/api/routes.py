@@ -10,11 +10,13 @@ from uuid import UUID
 from datetime import datetime
 import time
 from functools import wraps
+import os
 
 from ..db import get_pg_pool, get_redis
 from ..auth import CurrentUser, get_current_user
 
 router = APIRouter()
+API_KEY_SECRET = os.getenv("EXCHANGE_API_KEY_SECRET", "inarbit_secret_key")
 
 
 # ============================================
@@ -110,9 +112,9 @@ async def create_exchange(config: ExchangeConfigCreate, user: CurrentUser = Depe
                  api_secret_encrypted, passphrase_encrypted, 
                  is_spot_enabled, is_futures_enabled, is_active)
             VALUES ($1, $2, $3,
-                    pgp_sym_encrypt($4, 'inarbit_secret_key'),
-                    pgp_sym_encrypt($5, 'inarbit_secret_key'),
-                    pgp_sym_encrypt($6, 'inarbit_secret_key'),
+                    pgp_sym_encrypt($4, $9),
+                    pgp_sym_encrypt($5, $9),
+                    pgp_sym_encrypt($6, $9),
                     $7, $8, true)
             ON CONFLICT (user_id, exchange_id) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
@@ -127,7 +129,7 @@ async def create_exchange(config: ExchangeConfigCreate, user: CurrentUser = Depe
                       is_futures_enabled, is_active, created_at
         """, user.id, config.exchange_id, config.display_name, config.api_key,
              config.api_secret, config.passphrase or '',
-             config.is_spot_enabled, config.is_futures_enabled)
+             config.is_spot_enabled, config.is_futures_enabled, API_KEY_SECRET)
         
         return dict(row)
     except Exception as e:

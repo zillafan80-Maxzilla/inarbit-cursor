@@ -14,7 +14,11 @@ from decimal import Decimal
 import uuid
 import ccxt.async_support as ccxt_async
 
-from .db import get_pg_pool, get_redis
+try:
+    from .db import get_pg_pool, get_redis
+except ImportError:
+    # 兼容直接从项目根目录导入 risk_manager 的测试场景
+    from db import get_pg_pool, get_redis
 
 logger = logging.getLogger(__name__)
 

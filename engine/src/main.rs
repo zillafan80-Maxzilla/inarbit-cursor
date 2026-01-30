@@ -10,6 +10,7 @@ mod strategy;
 mod executor;
 mod config;
 mod db;
+mod risk;
 
 use anyhow::Result;
 use tracing::{info, Level};
@@ -52,7 +53,8 @@ async fn main() -> Result<()> {
     info!("已加载 {} 个策略", strategy_engine.strategy_count());
 
     // 初始化执行引擎
-    let executor = executor::OrderExecutor::new(exchanges.clone());
+    let mut executor = executor::OrderExecutor::new(exchanges.clone());
+    executor.set_simulation_mode(config.mode.to_lowercase() != "live");
 
     // 启动主循环
     info!("引擎启动完成，开始运行...");
@@ -84,7 +86,7 @@ async fn main() -> Result<()> {
     
     // 运行策略引擎
     tokio::select! {
-        result = strategy_engine.run(exchanges, executor) => {
+        result = strategy_engine.run(exchanges, &executor) => {
             if let Err(e) = result {
                 tracing::error!("策略引擎错误: {}", e);
             }

@@ -1,4 +1,4 @@
-﻿//! 策略引擎框架
+//! 策略引擎框架
 //! 
 //! 支持多策略注册、调度和融合
 
@@ -8,12 +8,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{error, info};
+use tokio::sync::{mpsc, RwLock};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::exchange::{ExchangeConnection, ExchangeId, Ticker};
 use crate::executor::OrderExecutor;
+use crate::risk::GLOBAL_RISK_MANAGER;
 
 /// 策略类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
@@ -155,36 +156,71 @@ impl Engine {
     pub async fn run(
         &self,
         exchanges: HashMap<ExchangeId, Arc<ExchangeConnection>>,
-        _executor: OrderExecutor,
+        executor: &OrderExecutor,
     ) -> Result<()> {
         *self.running.write().await = true;
         info!("策略引擎开始运行");
 
-        // 订阅所有交易所的 Ticker
-        let mut ticker_rx = {
-            // 这里简化处理，实际应该合并多个交易所的流
-            if let Some((_, conn)) = exchanges.iter().next() {
-                conn.subscribe_tickers()
-            } else {
-                anyhow::bail!("没有可用的交易所连接");
-            }
-        };
+        let execute_signals = std::env::var("ENGINE_EXECUTE_SIGNALS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if exchanges.is_empty() {
+            anyhow::bail!("没有可用的交易所连接");
+        }
+
+        // 合并多个交易所的 Ticker 流
+        let (ticker_tx, mut ticker_rx) = mpsc::channel::<Ticker>(1000);
+        for (exchange_id, conn) in exchanges.iter() {
+            let mut rx = conn.subscribe_tickers();
+            let tx = ticker_tx.clone();
+            let exchange_id = *exchange_id;
+
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(ticker) => {
+                            if tx.send(ticker).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            warn!("{:?} ticker 丢失 {} 条", exchange_id, count);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+                warn!("{:?} ticker 流已关闭", exchange_id);
+            });
+        }
 
         while *self.running.read().await {
             tokio::select! {
-                Ok(ticker) = ticker_rx.recv() => {
+                Some(ticker) = ticker_rx.recv() => {
                     // 分发 Ticker 到所有策略
                     let mut strategies = self.strategies.write().await;
                     for strategy in strategies.iter_mut() {
                         if let Some(signal) = strategy.on_ticker(&ticker).await {
                             // 发现信号，发送到执行器
                             info!("信号: {:?} -> {:.4}%", signal.strategy_type, signal.profit_rate * 100.0);
-                            
-                            // TODO: 发送到执行器
-                            // executor.execute(signal).await;
-                            
-                            // 推送到 Redis
+
+                            if !GLOBAL_RISK_MANAGER.evaluate_risk(&signal).await {
+                                warn!("信号被风控拦截: {:?}", signal.strategy_type);
+                                self.record_blocked_metric(signal.strategy_type).await;
+                                continue;
+                            }
+
+                            if execute_signals {
+                                if let Err(e) = executor.execute(signal.clone()).await {
+                                    error!("执行器错误: {}", e);
+                                }
+                            }
+
+                            // 推送到 Redis（保留监控/联调）
                             self.publish_signal(&signal).await;
+                            self.record_signal_metric(&signal).await;
                         }
                     }
                 }
@@ -205,6 +241,35 @@ impl Engine {
                 .arg(&payload)
                 .query_async(&mut conn)
                 .await;
+        }
+    }
+
+    async fn record_signal_metric(&self, signal: &Signal) {
+        if let Ok(mut conn) = self.redis.get_multiplexed_async_connection().await {
+            use redis::AsyncCommands;
+            let _: Result<(), _> = conn.hset(
+                "metrics:engine",
+                "last_signal_ts",
+                signal.timestamp.to_string(),
+            ).await;
+            let _: Result<(), _> = conn.hset(
+                "metrics:engine",
+                "last_strategy_type",
+                format!("{:?}", signal.strategy_type).to_lowercase(),
+            ).await;
+            let _: Result<(), _> = conn.incr("metrics:engine:signal_count", 1_i64).await;
+        }
+    }
+
+    async fn record_blocked_metric(&self, strategy_type: StrategyType) {
+        if let Ok(mut conn) = self.redis.get_multiplexed_async_connection().await {
+            use redis::AsyncCommands;
+            let _: Result<(), _> = conn.hset(
+                "metrics:engine",
+                "last_blocked_strategy_type",
+                format!("{:?}", strategy_type).to_lowercase(),
+            ).await;
+            let _: Result<(), _> = conn.incr("metrics:engine:blocked_count", 1_i64).await;
         }
     }
 
