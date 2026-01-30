@@ -255,3 +255,5 @@ cd engine && cargo build --release
 - OMS 告警：`/api/v1/oms/alerts` 返回 0 条记录（当前无告警样本）
 - 机会链路：metrics 三角=0 与 zset=0 一致；期现 metrics=16，而 zset=8/接口=9（推测扫描总量与写入上限/滚动更新存在差异）
 - OMS 闭环：`execute_latest`(paper) 成功；plans/orders/fills 各返回 3 条；PNL summary 字段齐全
+- OMS 接口健壮性：`plans/{id}/reconcile|refresh|cancel` 与 `orders/{id}/refresh|cancel` 均返回 success
+- WS 订单字段：`order:{user_id}:{status}` 推送包含 `order_id/status` 基础字段与交易字段（trading_mode/avg/fee/external_id）；detail 由 `OMS_PUBLISH_ORDER_DETAIL` 控制（plan_id/symbol/side/price 等）
