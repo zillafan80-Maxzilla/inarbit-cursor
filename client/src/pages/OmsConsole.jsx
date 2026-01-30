@@ -178,6 +178,11 @@ const OmsConsole = () => {
     const [alertError, setAlertError] = useState('');
     const [alertLimit, setAlertLimit] = useState(20);
     const [alertOffset, setAlertOffset] = useState(0);
+    const [oppList, setOppList] = useState([]);
+    const [oppStats, setOppStats] = useState(null);
+    const [oppLoading, setOppLoading] = useState(false);
+    const [oppError, setOppError] = useState('');
+    const [oppQuery, setOppQuery] = useState({ status: '', kind: '', limit: 20 });
     const [planMarkerFilter, setPlanMarkerFilter] = useState({
         execution: true,
         reconcile: true,
@@ -726,6 +731,47 @@ const OmsConsole = () => {
             setAlertLoading(false);
         }
     }, [alertLimit, alertOffset]);
+
+    const fetchOpportunityStats = useCallback(async () => {
+        setOppLoading(true);
+        setOppError('');
+        try {
+            const params = {
+                trading_mode: cfg.trading_mode,
+                status: oppQuery.status || undefined,
+                kind: oppQuery.kind || undefined,
+            };
+            const resp = await omsAPI.getOpportunityStats(params);
+            setOppStats(resp?.stats || null);
+            write(resp);
+        } catch (e) {
+            setOppStats(null);
+            setOppError(String(e?.message || e));
+        } finally {
+            setOppLoading(false);
+        }
+    }, [cfg.trading_mode, oppQuery]);
+
+    const fetchOpportunities = useCallback(async () => {
+        setOppLoading(true);
+        setOppError('');
+        try {
+            const params = {
+                trading_mode: cfg.trading_mode,
+                status: oppQuery.status || undefined,
+                kind: oppQuery.kind || undefined,
+                limit: oppQuery.limit,
+            };
+            const resp = await omsAPI.getOpportunities(params);
+            setOppList(resp?.opportunities || []);
+            write(resp);
+        } catch (e) {
+            setOppList([]);
+            setOppError(String(e?.message || e));
+        } finally {
+            setOppLoading(false);
+        }
+    }, [cfg.trading_mode, oppQuery]);
 
     useEffect(() => {
         const pid = String(planId || '').trim();
@@ -1288,6 +1334,64 @@ const OmsConsole = () => {
                                     <div style={{ fontWeight: 700 }}>{String(a.level || 'INFO')} · {String(a.category || '-')}</div>
                                     <div style={{ color: 'var(--text-muted)' }}>{String(a.message || '')}</div>
                                     <div style={{ color: 'var(--text-muted)' }}>{String(a.created_at || '')}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: '12px' }}>
+                <div className="card-header"><span className="card-title">🎯 机会统计与筛选</span></div>
+                <div className="card-body" style={{ padding: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>状态</label>
+                            <input
+                                value={oppQuery.status}
+                                onChange={(e) => setOppQuery({ ...oppQuery, status: e.target.value })}
+                                placeholder="accepted/executed/rejected"
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>类型</label>
+                            <input
+                                value={oppQuery.kind}
+                                onChange={(e) => setOppQuery({ ...oppQuery, kind: e.target.value })}
+                                placeholder="triangle/basis/funding"
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>条数</label>
+                            <input
+                                type="number"
+                                value={oppQuery.limit}
+                                onChange={(e) => setOppQuery({ ...oppQuery, limit: Number(e.target.value) })}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                            <button className="btn btn-secondary btn-sm" onClick={fetchOpportunityStats} disabled={oppLoading}>统计</button>
+                            <button className="btn btn-secondary btn-sm" onClick={fetchOpportunities} disabled={oppLoading}>拉取列表</button>
+                        </div>
+                    </div>
+                    {oppError && <div style={{ color: '#dc322f', whiteSpace: 'pre-wrap' }}>{oppError}</div>}
+                    {!oppError && oppStats && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                            总数: {oppStats.total ?? 0} ·
+                            状态: {Object.entries(oppStats.by_status || {}).map(([k, v]) => `${k}:${v}`).join(' ')} ·
+                            类型: {Object.entries(oppStats.by_kind || {}).map(([k, v]) => `${k}:${v}`).join(' ')}
+                        </div>
+                    )}
+                    {!oppError && (
+                        <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '10px' }}>
+                            {oppList.length === 0 && <div style={{ color: 'var(--text-muted)' }}>暂无机会记录</div>}
+                            {oppList.map((o) => (
+                                <div key={o.id} style={{ padding: '6px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                                    <div style={{ fontWeight: 700 }}>{String(o.kind || '-')} · {String(o.status || '-')}</div>
+                                    <div style={{ color: 'var(--text-muted)' }}>{String(o.id)}</div>
                                 </div>
                             ))}
                         </div>

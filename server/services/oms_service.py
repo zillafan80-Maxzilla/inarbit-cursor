@@ -2324,6 +2324,61 @@ class OmsService:
         )
         return [dict(r) for r in rows]
 
+    async def get_opportunity_stats(
+        self,
+        *,
+        user_id: UUID,
+        trading_mode: str = "paper",
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        table_name = "paper_opportunities" if trading_mode == "paper" else "live_opportunities"
+        pool = await get_pg_pool()
+        where = ["user_id = $1"]
+        params: list[Any] = [user_id]
+        idx = 2
+        if status:
+            where.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+        if kind:
+            where.append(f"kind = ${idx}")
+            params.append(kind)
+            idx += 1
+        if created_after:
+            where.append(f"created_at >= ${idx}")
+            params.append(created_after)
+            idx += 1
+        if created_before:
+            where.append(f"created_at <= ${idx}")
+            params.append(created_before)
+            idx += 1
+        clause = f"WHERE {' AND '.join(where)}"
+
+        rows = await pool.fetch(
+            f"""
+            SELECT status, kind, COUNT(*) AS total
+            FROM {table_name}
+            {clause}
+            GROUP BY status, kind
+            """,
+            *params,
+        )
+        by_status: dict[str, int] = {}
+        by_kind: dict[str, int] = {}
+        total = 0
+        for r in rows:
+            st = str(r["status"] or "unknown")
+            kd = str(r["kind"] or "unknown")
+            count = int(r["total"] or 0)
+            total += count
+            by_status[st] = by_status.get(st, 0) + count
+            by_kind[kd] = by_kind.get(kd, 0) + count
+
+        return {"total": total, "by_status": by_status, "by_kind": by_kind}
+
     async def _set_execution_plan_legs(self, *, plan_id: UUID, trading_mode: str, legs: list[dict[str, Any]]) -> None:
         table_name = 'paper_execution_plans' if trading_mode == 'paper' else 'live_execution_plans'
         pool = await get_pg_pool()

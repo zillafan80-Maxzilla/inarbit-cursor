@@ -326,6 +326,36 @@ async def list_oms_opportunities(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/opportunities/stats")
+async def get_oms_opportunity_stats(
+    user: CurrentUser = Depends(get_current_user),
+    trading_mode: str = "paper",
+    status: Optional[str] = None,
+    kind: Optional[str] = None,
+    created_after: Optional[str] = None,
+    created_before: Optional[str] = None,
+):
+    oms = OmsService()
+    try:
+        after_dt = datetime.fromisoformat(created_after) if created_after else None
+        before_dt = datetime.fromisoformat(created_before) if created_before else None
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid datetime format")
+
+    try:
+        stats = await oms.get_opportunity_stats(
+            user_id=user.id,
+            trading_mode=trading_mode,
+            status=status,
+            kind=kind,
+            created_after=after_dt,
+            created_before=before_dt,
+        )
+        return jsonable_encoder({"success": True, "stats": stats})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/opportunities/{opportunity_id}")
 async def get_oms_opportunity(
     opportunity_id: UUID,
