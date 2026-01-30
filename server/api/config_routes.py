@@ -7,6 +7,7 @@ import json
 import os
 from datetime import datetime
 from typing import List, Optional
+from uuid import UUID
 from pydantic import BaseModel
 
 from ..services.config_service import get_config_service
@@ -31,6 +32,17 @@ class SimulationUpdate(BaseModel):
     resetNow: Optional[bool] = None
 
 class OpportunityConfigUpdate(BaseModel):
+    config: dict
+
+
+class OpportunityConfigRollback(BaseModel):
+    version: int
+
+
+class OpportunityTemplateCreate(BaseModel):
+    strategyType: str
+    name: str
+    description: Optional[str] = None
     config: dict
 
 
@@ -195,6 +207,102 @@ async def update_opportunity_config(
         updated = await service.update_opportunity_config(
             strategy_type=strategy_type,
             config=payload.config or {},
+            user_id=user.id,
+        )
+        return {"success": True, "data": updated.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/opportunity/{strategy_type}/history")
+async def get_opportunity_config_history(
+    strategy_type: str,
+    user: CurrentUser = Depends(get_current_user),
+    limit: int = 20,
+):
+    try:
+        service = await get_config_service()
+        history = await service.list_opportunity_config_history(
+            strategy_type=strategy_type,
+            user_id=user.id,
+            limit=max(1, min(200, limit)),
+        )
+        return {"success": True, "history": history}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/opportunity/{strategy_type}/rollback")
+async def rollback_opportunity_config(
+    strategy_type: str,
+    payload: OpportunityConfigRollback,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        service = await get_config_service()
+        updated = await service.rollback_opportunity_config(
+            strategy_type=strategy_type,
+            version=payload.version,
+            user_id=user.id,
+        )
+        return {"success": True, "data": updated.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/opportunity/templates")
+async def list_opportunity_templates(
+    strategy_type: Optional[str] = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        service = await get_config_service()
+        templates = await service.list_opportunity_templates(strategy_type=strategy_type)
+        return {"success": True, "templates": templates}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/opportunity/templates")
+async def create_opportunity_template(
+    payload: OpportunityTemplateCreate,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        service = await get_config_service()
+        created = await service.create_opportunity_template(
+            strategy_type=payload.strategyType,
+            name=payload.name,
+            description=payload.description,
+            config=payload.config,
+            user_id=user.id,
+        )
+        return {"success": True, "template": created}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/opportunity/{strategy_type}/templates/{template_id}/apply")
+async def apply_opportunity_template(
+    strategy_type: str,
+    template_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        service = await get_config_service()
+        updated = await service.apply_opportunity_template(
+            template_id=template_id,
+            strategy_type=strategy_type,
             user_id=user.id,
         )
         return {"success": True, "data": updated.to_dict()}

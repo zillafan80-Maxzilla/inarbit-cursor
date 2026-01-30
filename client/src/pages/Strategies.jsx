@@ -55,12 +55,16 @@ const Strategies = () => {
     const [opportunityConfigs, setOpportunityConfigs] = useState({});
     const [opportunityLoading, setOpportunityLoading] = useState(false);
     const [opportunitySaving, setOpportunitySaving] = useState({});
+    const [opportunityHistory, setOpportunityHistory] = useState({});
+    const [opportunityTemplates, setOpportunityTemplates] = useState({});
+    const [templateDrafts, setTemplateDrafts] = useState({});
 
     // 切换策略开关
     const toggleStrategy = async (id) => {
         setUpdating(id);
         try {
             await strategyAPI.toggle(id);
+            await strategyAPI.reload();
             await refresh();
         } catch (err) {
             alert(`更新失败: ${err.message}`);
@@ -110,10 +114,88 @@ const Strategies = () => {
                     version: res?.data?.version || prev[type]?.version || 1,
                 },
             }));
+            await loadOpportunityHistory(type);
         } catch (err) {
             alert(`保存 ${type} 配置失败: ${err.message}`);
         } finally {
             setOpportunitySaving((prev) => ({ ...prev, [type]: false }));
+        }
+    };
+
+    const loadOpportunityHistory = async (type) => {
+        try {
+            const res = await configAPI.getOpportunityConfigHistory(type, { limit: 20 });
+            setOpportunityHistory((prev) => ({ ...prev, [type]: res?.history || [] }));
+        } catch (err) {
+            alert(`加载 ${type} 历史失败: ${err.message}`);
+        }
+    };
+
+    const rollbackOpportunityConfig = async (type, version) => {
+        if (!version) return;
+        try {
+            const res = await configAPI.rollbackOpportunityConfig(type, { version: Number(version) });
+            setOpportunityConfigs((prev) => ({
+                ...prev,
+                [type]: {
+                    raw: JSON.stringify(res?.data?.config || {}, null, 2),
+                    version: res?.data?.version || prev[type]?.version || 1,
+                    rollbackVersion: '',
+                },
+            }));
+            await loadOpportunityHistory(type);
+        } catch (err) {
+            alert(`回滚 ${type} 失败: ${err.message}`);
+        }
+    };
+
+    const loadOpportunityTemplates = async (type) => {
+        try {
+            const res = await configAPI.listOpportunityTemplates({ strategy_type: type });
+            setOpportunityTemplates((prev) => ({ ...prev, [type]: res?.templates || [] }));
+        } catch (err) {
+            alert(`加载 ${type} 模板失败: ${err.message}`);
+        }
+    };
+
+    const createOpportunityTemplate = async (type) => {
+        const draft = templateDrafts[type] || {};
+        const raw = opportunityConfigs[type]?.raw || '{}';
+        if (!draft.name) {
+            alert('请输入模板名称');
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            await configAPI.createOpportunityTemplate({
+                strategyType: type,
+                name: draft.name,
+                description: draft.description || '',
+                config: parsed,
+            });
+            setTemplateDrafts((prev) => ({
+                ...prev,
+                [type]: { name: '', description: '' },
+            }));
+            await loadOpportunityTemplates(type);
+        } catch (err) {
+            alert(`创建模板失败: ${err.message}`);
+        }
+    };
+
+    const applyOpportunityTemplate = async (type, templateId) => {
+        try {
+            const res = await configAPI.applyOpportunityTemplate(type, templateId);
+            setOpportunityConfigs((prev) => ({
+                ...prev,
+                [type]: {
+                    raw: JSON.stringify(res?.data?.config || {}, null, 2),
+                    version: res?.data?.version || prev[type]?.version || 1,
+                },
+            }));
+            await loadOpportunityHistory(type);
+        } catch (err) {
+            alert(`应用模板失败: ${err.message}`);
         }
     };
 
@@ -319,17 +401,31 @@ const Strategies = () => {
                                     background: 'rgba(0,0,0,0.01)',
                                 }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                                     <div style={{ fontSize: '12px', fontWeight: 600 }}>
                                         {typeInfo.icon} {typeInfo.name || type} <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>v{version}</span>
                                     </div>
-                                    <button
-                                        className="btn btn-primary btn-sm"
-                                        onClick={() => saveOpportunityConfig(type)}
-                                        disabled={opportunitySaving[type]}
-                                    >
-                                        {opportunitySaving[type] ? '保存中...' : '保存'}
-                                    </button>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                        <button
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => loadOpportunityHistory(type)}
+                                        >
+                                            历史
+                                        </button>
+                                        <button
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => loadOpportunityTemplates(type)}
+                                        >
+                                            模板
+                                        </button>
+                                        <button
+                                            className="btn btn-primary btn-sm"
+                                            onClick={() => saveOpportunityConfig(type)}
+                                            disabled={opportunitySaving[type]}
+                                        >
+                                            {opportunitySaving[type] ? '保存中...' : '保存'}
+                                        </button>
+                                    </div>
                                 </div>
                                 <textarea
                                     value={configText}
@@ -351,6 +447,91 @@ const Strategies = () => {
                                         padding: '8px',
                                     }}
                                 />
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
+                                    <input
+                                        className="form-input"
+                                        placeholder="回滚版本号"
+                                        value={opportunityConfigs[type]?.rollbackVersion || ''}
+                                        onChange={(e) => setOpportunityConfigs((prev) => ({
+                                            ...prev,
+                                            [type]: {
+                                                ...prev[type],
+                                                rollbackVersion: e.target.value,
+                                            },
+                                        }))}
+                                        style={{ minWidth: '120px', height: '26px' }}
+                                    />
+                                    <button
+                                        className="btn btn-sm btn-danger"
+                                        onClick={() => rollbackOpportunityConfig(type, opportunityConfigs[type]?.rollbackVersion)}
+                                    >
+                                        回滚
+                                    </button>
+                                    <input
+                                        className="form-input"
+                                        placeholder="模板名称"
+                                        value={templateDrafts[type]?.name || ''}
+                                        onChange={(e) => setTemplateDrafts((prev) => ({
+                                            ...prev,
+                                            [type]: { ...prev[type], name: e.target.value },
+                                        }))}
+                                        style={{ minWidth: '140px', height: '26px' }}
+                                    />
+                                    <input
+                                        className="form-input"
+                                        placeholder="模板说明"
+                                        value={templateDrafts[type]?.description || ''}
+                                        onChange={(e) => setTemplateDrafts((prev) => ({
+                                            ...prev,
+                                            [type]: { ...prev[type], description: e.target.value },
+                                        }))}
+                                        style={{ minWidth: '180px', height: '26px' }}
+                                    />
+                                    <button
+                                        className="btn btn-sm btn-secondary"
+                                        onClick={() => createOpportunityTemplate(type)}
+                                    >
+                                        保存模板
+                                    </button>
+                                </div>
+
+                                {Array.isArray(opportunityTemplates[type]) && opportunityTemplates[type].length > 0 && (
+                                    <div style={{ marginTop: '8px', fontSize: '10px' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '6px' }}>模板列表</div>
+                                        <div style={{ display: 'grid', gap: '6px' }}>
+                                            {opportunityTemplates[type].slice(0, 10).map((tpl) => (
+                                                <div key={tpl.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                                                    <div>
+                                                        <div style={{ fontWeight: 600 }}>{tpl.name}</div>
+                                                        <div style={{ color: 'var(--text-muted)' }}>{tpl.description || '-'}</div>
+                                                    </div>
+                                                    <button className="btn btn-sm btn-primary" onClick={() => applyOpportunityTemplate(type, tpl.id)}>
+                                                        应用
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {Array.isArray(opportunityHistory[type]) && opportunityHistory[type].length > 0 && (
+                                    <div style={{ marginTop: '8px', fontSize: '10px' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '6px' }}>版本历史</div>
+                                        <div style={{ display: 'grid', gap: '6px' }}>
+                                            {opportunityHistory[type].slice(0, 10).map((item) => (
+                                                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                                    <div>
+                                                        <div>v{item.version}</div>
+                                                        <div style={{ color: 'var(--text-muted)' }}>
+                                                            {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ color: 'var(--text-muted)' }}>配置快照</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

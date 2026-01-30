@@ -279,7 +279,6 @@ const Settings = () => {
                     {resetting ? '重置中...' : '🗑️ 初始化系统'}
                 </button>
             </div>
-        </div>
 
             <div className="stat-box" style={{ padding: '12px', marginTop: '16px' }}>
                 <h3 style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.05)', paddingBottom: '6px' }}>
@@ -322,6 +321,7 @@ const Settings = () => {
                     </div>
                 )}
             </div>
+        </div>
     );
 };
 

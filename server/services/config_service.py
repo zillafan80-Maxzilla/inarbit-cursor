@@ -564,12 +564,186 @@ class ConfigService:
             updated_at=row.get("updated_at"),
         )
 
+        try:
+            async with pool.acquire() as history_conn:
+                await history_conn.execute(
+                    """
+                    INSERT INTO opportunity_config_history (user_id, strategy_type, version, config)
+                    VALUES ($1, $2::strategy_type, $3, $4::jsonb)
+                    """,
+                    user_id,
+                    normalized,
+                    updated.version,
+                    json.dumps(updated.config, ensure_ascii=False),
+                )
+        except Exception:
+            pass
+
         user_key = str(user_id)
         if user_key not in self._opportunity_cache:
             self._opportunity_cache[user_key] = {}
         self._opportunity_cache[user_key][normalized] = updated
         await self._sync_opportunity_configs_to_redis(user_id, {normalized: updated})
         return updated
+
+    async def list_opportunity_config_history(self, strategy_type: str, user_id: UUID, limit: int = 20) -> list[dict]:
+        normalized = self._validate_strategy_type(strategy_type)
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, strategy_type, version, config, created_at
+                FROM opportunity_config_history
+                WHERE user_id = $1 AND strategy_type = $2::strategy_type
+                ORDER BY created_at DESC
+                LIMIT $3
+                """,
+                user_id,
+                normalized,
+                limit,
+            )
+        out = []
+        for r in rows or []:
+            item = dict(r)
+            cfg = item.get("config") or {}
+            if isinstance(cfg, str):
+                try:
+                    cfg = json.loads(cfg)
+                except Exception:
+                    cfg = {}
+            item["config"] = cfg
+            out.append(item)
+        return out
+
+    async def rollback_opportunity_config(self, strategy_type: str, version: int, user_id: UUID) -> OpportunityConfig:
+        normalized = self._validate_strategy_type(strategy_type)
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT config
+                FROM opportunity_config_history
+                WHERE user_id = $1 AND strategy_type = $2::strategy_type AND version = $3
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                user_id,
+                normalized,
+                int(version),
+            )
+        if not row:
+            raise ValueError("history version not found")
+
+        cfg = row.get("config") or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg)
+            except Exception:
+                cfg = {}
+        return await self.update_opportunity_config(normalized, cfg, user_id)
+
+    async def list_opportunity_templates(self, strategy_type: Optional[str] = None) -> list[dict]:
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            if strategy_type:
+                normalized = self._validate_strategy_type(strategy_type)
+                rows = await conn.fetch(
+                    """
+                    SELECT id, strategy_type, name, description, config, created_at
+                    FROM opportunity_config_templates
+                    WHERE strategy_type = $1::strategy_type
+                    ORDER BY created_at DESC
+                    """,
+                    normalized,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, strategy_type, name, description, config, created_at
+                    FROM opportunity_config_templates
+                    ORDER BY created_at DESC
+                    """
+                )
+        out = []
+        for r in rows or []:
+            item = dict(r)
+            cfg = item.get("config") or {}
+            if isinstance(cfg, str):
+                try:
+                    cfg = json.loads(cfg)
+                except Exception:
+                    cfg = {}
+            item["config"] = cfg
+            out.append(item)
+        return out
+
+    async def create_opportunity_template(
+        self,
+        *,
+        strategy_type: str,
+        name: str,
+        description: Optional[str],
+        config: dict,
+        user_id: UUID,
+    ) -> dict:
+        normalized = self._validate_strategy_type(strategy_type)
+        self._validate_opportunity_config(normalized, config or {})
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO opportunity_config_templates (strategy_type, name, description, config, created_by)
+                VALUES ($1::strategy_type, $2, $3, $4::jsonb, $5)
+                RETURNING id, strategy_type, name, description, config, created_at
+                """,
+                normalized,
+                name,
+                description,
+                json.dumps(config, ensure_ascii=False),
+                user_id,
+            )
+        if not row:
+            raise RuntimeError("failed to create template")
+        item = dict(row)
+        item_cfg = item.get("config") or {}
+        if isinstance(item_cfg, str):
+            try:
+                item_cfg = json.loads(item_cfg)
+            except Exception:
+                item_cfg = {}
+        item["config"] = item_cfg
+        return item
+
+    async def apply_opportunity_template(
+        self,
+        *,
+        template_id: UUID,
+        strategy_type: str,
+        user_id: UUID,
+    ) -> OpportunityConfig:
+        normalized = self._validate_strategy_type(strategy_type)
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT strategy_type, config
+                FROM opportunity_config_templates
+                WHERE id = $1
+                """,
+                template_id,
+            )
+        if not row:
+            raise ValueError("template not found")
+        if str(row["strategy_type"]) != normalized:
+            raise ValueError("template strategy_type mismatch")
+
+        cfg = row.get("config") or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg)
+            except Exception:
+                cfg = {}
+        return await self.update_opportunity_config(normalized, cfg, user_id)
     
     # ============================================
     # 缓存管理

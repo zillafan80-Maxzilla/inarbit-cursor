@@ -7,13 +7,13 @@ import asyncio
 import json
 import logging
 import math
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 from uuid import UUID
 
-from ..db import get_pg_pool
-from ..services.config_service import get_config_service
+from ..db import get_pg_pool, get_redis
+from ..services.config_service import get_config_service, TradingPair
 from ..services.market_data_repository import MarketDataRepository
 from ..engines.arbitrage_algorithms import BellmanFordGraph, FundingRateArbitrage, TriangularArbitrage
 
@@ -45,6 +45,7 @@ class StrategyEngine:
         self.strategies: Dict[str, StrategyState] = {}
         self.is_running = False
         self._tasks: List[asyncio.Task] = []
+        self._task_map: Dict[str, asyncio.Task] = {}
         self._config_service = None
         self.user_id: Optional[UUID] = None
         self._scan_interval_cache: Dict[str, tuple[float, float]] = {}
@@ -77,43 +78,54 @@ class StrategyEngine:
     async def _load_strategies_from_db(self, user_id: Optional[UUID] = None):
         """从数据库加载策略配置"""
         try:
-            pool = await get_pg_pool()
-            async with pool.acquire() as conn:
-                if user_id is None:
-                    user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
-                    if user_count and int(user_count) > 1:
-                        logger.warning("检测到多用户，但 StrategyEngine 未按用户隔离；已跳过策略自动加载")
-                        return
-                    user_id = await conn.fetchval("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
-
-                if not user_id:
-                    return
-
-                self.user_id = user_id
-
-                rows = await conn.fetch(
-                    """
-                    SELECT id, strategy_type, name, is_enabled,
-                           total_trades, total_profit, last_run_at
-                    FROM strategy_configs
-                    WHERE user_id = $1
-                    ORDER BY priority ASC
-                    """,
-                    user_id,
-                )
-                
-                for row in rows:
-                    self.strategies[str(row['id'])] = StrategyState(
-                        strategy_id=str(row['id']),
-                        strategy_type=row['strategy_type'],
-                        name=row['name'],
-                        is_running=row['is_enabled'],
-                        last_run=row['last_run_at'],
-                        total_trades=row['total_trades'] or 0,
-                        total_profit=float(row['total_profit']) if row['total_profit'] else 0.0
-                    )
+            states = await self._fetch_strategy_states(user_id=user_id)
+            if states is None:
+                return
+            if not any(s.is_running for s in states.values()):
+                await self._ensure_default_triangular(user_id=user_id)
+                states = await self._fetch_strategy_states(user_id=user_id) or states
+            self.strategies = states
         except Exception as e:
             logger.error(f"加载策略配置失败: {e}")
+
+    async def _fetch_strategy_states(self, user_id: Optional[UUID] = None) -> Optional[Dict[str, StrategyState]]:
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            if user_id is None:
+                user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+                if user_count and int(user_count) > 1:
+                    logger.warning("检测到多用户，但 StrategyEngine 未按用户隔离；已跳过策略自动加载")
+                    return None
+                user_id = await conn.fetchval("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+
+            if not user_id:
+                return None
+
+            self.user_id = user_id
+
+            rows = await conn.fetch(
+                """
+                SELECT id, strategy_type, name, is_enabled,
+                       total_trades, total_profit, last_run_at
+                FROM strategy_configs
+                WHERE user_id = $1
+                ORDER BY priority ASC
+                """,
+                user_id,
+            )
+
+        states: Dict[str, StrategyState] = {}
+        for row in rows:
+            states[str(row['id'])] = StrategyState(
+                strategy_id=str(row['id']),
+                strategy_type=row['strategy_type'],
+                name=row['name'],
+                is_running=row['is_enabled'],
+                last_run=row['last_run_at'],
+                total_trades=row['total_trades'] or 0,
+                total_profit=float(row['total_profit']) if row['total_profit'] else 0.0
+            )
+        return states
     
     async def start(self):
         """启动策略引擎"""
@@ -132,6 +144,7 @@ class StrategyEngine:
             if state.is_running:
                 task = asyncio.create_task(self._run_strategy(strategy_id))
                 self._tasks.append(task)
+                self._task_map[strategy_id] = task
         
         logger.info(f"策略引擎已启动，运行中策略: {len(self._tasks)}")
     
@@ -218,6 +231,7 @@ class StrategyEngine:
                 f"总收益: {state.total_profit:.2f} USDT | "
                 f"平均执行时间: {sum(execution_times)/len(execution_times) if execution_times else 0:.2f}ms"
             )
+            self._task_map.pop(strategy_id, None)
 
     
     async def _execute_strategy_cycle(self, strategy_id: str):
@@ -280,7 +294,11 @@ class StrategyEngine:
             service = await get_config_service()
             pairs = await service.get_pairs_for_exchange(exchange_id)
             if not pairs:
+                pairs = await self._load_pairs_from_redis(exchange_id)
+            if not pairs:
                 return
+            if not base_currencies:
+                base_currencies = await self._get_top_base_currencies(exchange_id, limit=3)
 
             repo = MarketDataRepository()
             triangular = TriangularArbitrage()
@@ -337,6 +355,159 @@ class StrategyEngine:
             
         except Exception as e:
             logger.error(f"三角套利执行失败: {e}", exc_info=True)
+
+    async def _ensure_default_triangular(self, user_id: Optional[UUID]) -> None:
+        if not user_id:
+            return
+        pool = await get_pg_pool()
+        default_exchange_id = await self._get_default_exchange_id(user_id)
+        async with pool.acquire() as conn:
+            enabled_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM strategy_configs WHERE user_id = $1 AND is_enabled = true",
+                user_id,
+            )
+            if enabled_count and int(enabled_count) > 0:
+                return
+            existing = await conn.fetchrow(
+                """
+                SELECT id, config
+                FROM strategy_configs
+                WHERE user_id = $1 AND strategy_type = 'triangular'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                user_id,
+            )
+            if existing:
+                cfg = existing.get("config") or {}
+                if isinstance(cfg, str):
+                    try:
+                        cfg = json.loads(cfg)
+                    except Exception:
+                        cfg = {}
+                if not cfg.get("base_currencies"):
+                    cfg["base_currencies"] = await self._get_top_base_currencies(default_exchange_id, limit=3)
+                await conn.execute(
+                    """
+                    UPDATE strategy_configs
+                    SET is_enabled = true, priority = 1, config = $3::jsonb, updated_at = NOW()
+                    WHERE id = $1 AND user_id = $2
+                    """,
+                    existing["id"],
+                    user_id,
+                    json.dumps(cfg, ensure_ascii=False),
+                )
+                return
+            default_config = {
+                "min_profit_rate": 0.001,
+                "fee_rate": 0.0004,
+                "base_currencies": await self._get_top_base_currencies(default_exchange_id, limit=3),
+            }
+            await conn.execute(
+                """
+                INSERT INTO strategy_configs
+                    (user_id, strategy_type, name, description, is_enabled, priority, config)
+                VALUES ($1, 'triangular', '三角套利', '默认三角套利策略', true, 1, $2::jsonb)
+                """,
+                user_id,
+                json.dumps(default_config, ensure_ascii=False),
+            )
+
+    async def _get_default_exchange_id(self, user_id: UUID) -> str:
+        try:
+            pool = await get_pg_pool()
+            async with pool.acquire() as conn:
+                exchange_id = await conn.fetchval(
+                    """
+                    SELECT exchange_id
+                    FROM exchange_configs
+                    WHERE user_id = $1 AND is_active = true
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    user_id,
+                )
+                if exchange_id:
+                    return str(exchange_id)
+        except Exception:
+            pass
+        return "binance"
+
+    async def _load_pairs_from_redis(self, exchange_id: str) -> List[TradingPair]:
+        try:
+            redis = await get_redis()
+            symbols = await redis.smembers(f"symbols:ticker:{exchange_id}")
+            pairs: List[TradingPair] = []
+            for raw in symbols or []:
+                symbol = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                base, quote = self._split_symbol(symbol)
+                if not base or not quote:
+                    continue
+                pairs.append(
+                    TradingPair(
+                        symbol=symbol,
+                        base=base,
+                        quote=quote,
+                        is_active=True,
+                        supported_exchanges=[exchange_id],
+                    )
+                )
+            return pairs
+        except Exception:
+            return []
+
+    async def _get_top_base_currencies(self, exchange_id: str, limit: int = 3) -> List[str]:
+        try:
+            redis = await get_redis()
+            symbols = await redis.smembers(f"symbols:ticker:{exchange_id}")
+            volume_by_base: Dict[str, float] = {}
+            for raw in symbols or []:
+                symbol = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                base, quote = self._split_symbol(symbol)
+                if not base:
+                    continue
+                ticker = await redis.hgetall(f"ticker:{exchange_id}:{symbol}")
+                vol = self._parse_float(
+                    (ticker or {}).get("quoteVolume")
+                    or (ticker or {}).get("volume")
+                    or (ticker or {}).get("baseVolume")
+                )
+                if vol is None:
+                    continue
+                volume_by_base[base] = volume_by_base.get(base, 0.0) + float(vol)
+            ranked = sorted(volume_by_base.items(), key=lambda x: x[1], reverse=True)
+            top = [b for b, _ in ranked[: max(1, limit)]]
+            if top:
+                return top
+        except Exception:
+            pass
+        return ["USDT", "BTC", "ETH"]
+
+    def _split_symbol(self, symbol: str) -> Tuple[Optional[str], Optional[str]]:
+        if not symbol:
+            return None, None
+        if "/" in symbol:
+            base, quote = symbol.split("/", 1)
+            return base, quote
+        if "-" in symbol:
+            base, quote = symbol.split("-", 1)
+            return base, quote
+        for quote in ("USDT", "USDC", "USD", "BTC", "ETH", "BNB"):
+            if symbol.endswith(quote) and len(symbol) > len(quote):
+                return symbol[: -len(quote)], quote
+        return None, None
+
+    def _parse_float(self, value) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8")
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
     
     async def _execute_graph(self, strategy_id: str):
         """图搜索套利策略执行"""
@@ -545,11 +716,53 @@ class StrategyEngine:
         
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
+        self._task_map = {}
         
         # 更新数据库中的机器人状态
         await self._update_bot_status('stopped')
         
         logger.info("策略引擎已停止")
+
+    async def reload_for_user(self, user_id: UUID):
+        """热加载策略配置并同步运行态"""
+        states = await self._fetch_strategy_states(user_id=user_id)
+        if states is None:
+            return
+        if not any(s.is_running for s in states.values()):
+            await self._ensure_default_triangular(user_id=user_id)
+            states = await self._fetch_strategy_states(user_id=user_id) or states
+
+        if not self.is_running:
+            self.strategies = states
+            self.user_id = user_id
+            return
+
+        # 停止被禁用或已删除的策略
+        for strategy_id, state in list(self.strategies.items()):
+            next_state = states.get(strategy_id)
+            if not next_state or not next_state.is_running:
+                state.is_running = False
+
+        # 更新/新增策略并启动
+        for strategy_id, next_state in states.items():
+            if strategy_id in self.strategies:
+                current = self.strategies[strategy_id]
+                current.strategy_type = next_state.strategy_type
+                current.name = next_state.name
+                current.is_running = next_state.is_running
+                current.last_run = next_state.last_run
+                current.total_trades = next_state.total_trades
+                current.total_profit = next_state.total_profit
+            else:
+                self.strategies[strategy_id] = next_state
+
+            if self.strategies[strategy_id].is_running:
+                task = self._task_map.get(strategy_id)
+                if not task or task.done():
+                    new_task = asyncio.create_task(self._run_strategy(strategy_id))
+                    self._tasks.append(new_task)
+                    self._task_map[strategy_id] = new_task
+        self._tasks = [t for t in self._tasks if not t.done()]
     
     async def _update_bot_status(self, status: str):
         """更新数据库中的机器人状态"""

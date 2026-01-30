@@ -144,6 +144,7 @@ export const strategyAPI = {
     toggle: (id) => fetchAPI(`/strategies/${id}/toggle`, {
         method: 'POST',
     }),
+    reload: () => fetchAPI('/strategies/reload', { method: 'POST' }),
 };
 
 // ============================================
@@ -224,6 +225,25 @@ export const configAPI = {
     updateOpportunityConfig: (strategyType, payload) => fetchAPI(`/config/opportunity/${strategyType}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
+    }),
+    getOpportunityConfigHistory: (strategyType, params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/config/opportunity/${strategyType}/history${query ? '?' + query : ''}`);
+    },
+    rollbackOpportunityConfig: (strategyType, payload) => fetchAPI(`/config/opportunity/${strategyType}/rollback`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
+    listOpportunityTemplates: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/config/opportunity/templates${query ? '?' + query : ''}`);
+    },
+    createOpportunityTemplate: (payload) => fetchAPI('/config/opportunity/templates', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
+    applyOpportunityTemplate: (strategyType, templateId) => fetchAPI(`/config/opportunity/${strategyType}/templates/${templateId}/apply`, {
+        method: 'POST',
     }),
 
     // 获取全局设置

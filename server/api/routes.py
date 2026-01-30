@@ -13,6 +13,7 @@ from functools import wraps
 import os
 
 from ..db import get_pg_pool, get_redis
+from ..engines.strategy_engine import get_strategy_engine_for_user
 from ..auth import CurrentUser, get_current_user
 
 router = APIRouter()
@@ -225,7 +226,11 @@ async def create_strategy(config: StrategyConfigCreate, user: CurrentUser = Depe
         """, user.id, config.strategy_type, config.name, config.description,
              config.priority, config.capital_percent, config.per_trade_limit,
              config.config)
-        
+        try:
+            engine = await get_strategy_engine_for_user(user.id)
+            await engine.reload_for_user(user.id)
+        except Exception:
+            pass
         return dict(row)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -265,7 +270,11 @@ async def update_strategy(strategy_id: UUID, update: StrategyConfigUpdate, user:
     
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    
+    try:
+        engine = await get_strategy_engine_for_user(user.id)
+        await engine.reload_for_user(user.id)
+    except Exception:
+        pass
     return dict(row)
 
 
@@ -283,8 +292,23 @@ async def toggle_strategy(strategy_id: UUID, user: CurrentUser = Depends(get_cur
     
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    try:
+        engine = await get_strategy_engine_for_user(user.id)
+        await engine.reload_for_user(user.id)
+    except Exception:
+        pass
     
     return {"id": str(row['id']), "is_enabled": row['is_enabled']}
+
+
+@router.post("/strategies/reload")
+async def reload_strategies(user: CurrentUser = Depends(get_current_user)):
+    try:
+        engine = await get_strategy_engine_for_user(user.id)
+        await engine.reload_for_user(user.id)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================

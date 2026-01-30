@@ -12,6 +12,13 @@ const RiskDashboard = () => {
   const [systemMetrics, setSystemMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedMetric, setSelectedMetric] = useState(null);
+  const metricsData = systemMetrics?.data ? systemMetrics.data : systemMetrics || {};
+  const opportunities = metricsData?.opportunities || {};
+  const decisionMetrics = metricsData?.decision_metrics || {};
+  const omsMetrics = metricsData?.oms_metrics || {};
+  const marketDataMetrics = metricsData?.market_data_metrics || {};
+  const marketData = metricsData?.market_data || {};
+  const health = metricsData?.health || {};
 
   const riskMetrics = {
     totalEquity: Number(riskStatus.total_equity || 0),
@@ -289,8 +296,56 @@ const RiskDashboard = () => {
               </div>
             </div>
             <div className="info-panel-body">
-              <pre style={{ fontSize: '10px', whiteSpace: 'pre-wrap' }}>
-                {JSON.stringify(systemMetrics || {}, null, 2)}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '10px' }}>
+                <div className="stat-box">
+                  <div className="stat-label">机会池</div>
+                  <div className="stat-num">{(opportunities.triangular || 0) + (opportunities.cashcarry || 0)}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>三角 {opportunities.triangular || 0} / 期现 {opportunities.cashcarry || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">决策队列</div>
+                  <div className="stat-num">{metricsData?.decisions || 0}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>过滤 {decisionMetrics?.blocked || 0} / 通过 {decisionMetrics?.passed || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">OMS 执行</div>
+                  <div className="stat-num">{omsMetrics?.executed || 0}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>失败 {omsMetrics?.failed || 0} / 拒单 {omsMetrics?.rejected || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">行情健康</div>
+                  <div className="stat-num" style={{ color: health?.market_data_fresh ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {health?.market_data_fresh ? '新鲜' : '滞后'}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    延迟 {health?.market_data_age_ms ?? '-'} ms
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '10px' }}>
+                <div className="stat-box">
+                  <div className="stat-label">行情覆盖</div>
+                  <div className="stat-num">{marketData?.symbols_spot || 0}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>合约 {marketData?.symbols_futures || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">盘口/费率</div>
+                  <div className="stat-num">{marketData?.symbols_orderbook || 0}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>费率 {marketData?.symbols_funding || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">决策延迟</div>
+                  <div className="stat-num">{decisionMetrics?.latency_ms || 0} ms</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>窗口 {decisionMetrics?.window_size || 0}</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-label">行情时间戳</div>
+                  <div className="stat-num">{marketDataMetrics?.timestamp_ms || '-'}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>来源 {marketDataMetrics?.source || '-'}</div>
+                </div>
+              </div>
+              <pre style={{ fontSize: '10px', whiteSpace: 'pre-wrap', marginTop: '8px' }}>
+                {JSON.stringify(metricsData || {}, null, 2)}
               </pre>
             </div>
           </div>
