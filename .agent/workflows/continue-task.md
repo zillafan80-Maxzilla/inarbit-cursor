@@ -251,3 +251,4 @@ cd engine && cargo build --release
 - 指标快照：`/api/v1/system/metrics` 返回三角机会 12、期现机会 13、决策 2
 - 机会/决策抽样：`/api/v1/arbitrage/opportunities` 三角=0、期现=5；`/api/v1/decision/decisions` 决策=2（与指标存在差异需确认刷新节奏）
 - 数据新鲜度：首次 `market_data_fresh=false`（age 8173ms > max 5000ms），二次检查为 `true`（age 4312ms），需继续观察稳定性
+- 决策约束：`/api/v1/decision/constraints` 与 `constraints/auto/effective` 正常返回（auto 中有黑名单与平均数据延迟）
