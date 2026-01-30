@@ -39,7 +39,7 @@ description: inarbit 高频交易系统重构任务清单
 - [x] 行情服务写入 Redis 指标校验
 - [ ] 三角/期现机会服务产出稳定性验证
 - [x] 决策服务约束筛选链路验证
-- [ ] `/api/v1/system/metrics` 指标核对
+- [x] `/api/v1/system/metrics` 指标核对
 
 ### 阶段 3: OMS 执行闭环 🔄
 
@@ -263,3 +263,4 @@ cd engine && cargo build --release
 - 回归范围补充：`tests/integration/test_global_strategy.py` 2 passed / 3 skipped；`tests/ui_smoke_test.py` 1 skipped
 - 机会产出稳定性：5 轮采样 `metrics_tri=0`、`metrics_cc=9~12`；API 列表 `tri=0/cc=0`（与 metrics 差异，需后续核对存储上限/刷新节奏）
 - 决策约束验证：constraints/effective min_profit_rate=0.001、max_positions=5；auto 未设置；3 轮决策数量稳定为 1
+- metrics 核对：metrics opp/decisions 与 redis 一致（tri=0/cc=11/decisions=1）；constraints min_profit_rate=0.001；market_regime 为空（需确认刷新触发）
