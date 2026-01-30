@@ -178,6 +178,13 @@ const OmsConsole = () => {
     const [alertError, setAlertError] = useState('');
     const [alertLimit, setAlertLimit] = useState(20);
     const [alertOffset, setAlertOffset] = useState(0);
+    const [alertStats, setAlertStats] = useState(null);
+    const [alertQuery, setAlertQuery] = useState({
+        level: '',
+        category: '',
+        created_after: '',
+        created_before: '',
+    });
     const [oppList, setOppList] = useState([]);
     const [oppStats, setOppStats] = useState(null);
     const [oppLoading, setOppLoading] = useState(false);
@@ -722,15 +729,24 @@ const OmsConsole = () => {
         setAlertLoading(true);
         setAlertError('');
         try {
-            const resp = await omsAPI.getAlerts({ limit: alertLimit, offset: alertOffset });
+            const params = {
+                limit: alertLimit,
+                offset: alertOffset,
+                level: alertQuery.level || undefined,
+                category: alertQuery.category || undefined,
+                created_after: alertQuery.created_after || undefined,
+                created_before: alertQuery.created_before || undefined,
+            };
+            const resp = await omsAPI.getAlerts(params);
             setAlertList(resp?.alerts || []);
+            setAlertStats(resp?.stats || null);
             write(resp);
         } catch (e) {
             setAlertError(String(e?.message || e));
         } finally {
             setAlertLoading(false);
         }
-    }, [alertLimit, alertOffset]);
+    }, [alertLimit, alertOffset, alertQuery]);
 
     const fetchOpportunityStats = useCallback(async () => {
         setOppLoading(true);
@@ -1325,6 +1341,54 @@ const OmsConsole = () => {
                         </div>
                         <button className="btn btn-secondary btn-sm" onClick={fetchAlerts} disabled={alertLoading}>拉取告警</button>
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>等级</label>
+                            <select
+                                value={alertQuery.level}
+                                onChange={(e) => setAlertQuery({ ...alertQuery, level: e.target.value })}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            >
+                                <option value="">全部</option>
+                                <option value="info">INFO</option>
+                                <option value="warn">WARN</option>
+                                <option value="error">ERROR</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>类别</label>
+                            <input
+                                value={alertQuery.category}
+                                onChange={(e) => setAlertQuery({ ...alertQuery, category: e.target.value })}
+                                placeholder="risk/latency/order_failure"
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>开始时间</label>
+                            <input
+                                type="datetime-local"
+                                value={alertQuery.created_after}
+                                onChange={(e) => setAlertQuery({ ...alertQuery, created_after: e.target.value })}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>结束时间</label>
+                            <input
+                                type="datetime-local"
+                                value={alertQuery.created_before}
+                                onChange={(e) => setAlertQuery({ ...alertQuery, created_before: e.target.value })}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                    </div>
+                    {!alertError && alertStats && (
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                            等级: {Object.entries(alertStats.by_level || {}).map(([k, v]) => `${k}:${v}`).join(' ')} ·
+                            类别: {Object.entries(alertStats.by_category || {}).map(([k, v]) => `${k}:${v}`).join(' ')}
+                        </div>
+                    )}
                     {alertError && <div style={{ color: '#dc322f', whiteSpace: 'pre-wrap' }}>{alertError}</div>}
                     {!alertError && (
                         <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '10px' }}>

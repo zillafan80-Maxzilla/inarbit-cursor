@@ -122,6 +122,10 @@ async def preview_reconcile_next_action(
 async def get_alert_history(
     limit: int = 50,
     offset: int = 0,
+    level: Optional[str] = None,
+    category: Optional[str] = None,
+    created_after: Optional[str] = None,
+    created_before: Optional[str] = None,
     user: CurrentUser = Depends(get_current_user),
 ):
     """获取 OMS 告警历史"""
@@ -134,22 +138,69 @@ async def get_alert_history(
 
     redis = await get_redis()
     key = f"audit:alert:{user.id}"
-    end = offset + limit - 1
-    rows = await redis.lrange(key, offset, end)
-    alerts = []
+    rows = await redis.lrange(key, 0, -1)
+    raw_total = await redis.llen(key)
+
+    def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        val = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(val)
+        except Exception:
+            return None
+
+    after_dt = _parse_dt(created_after)
+    before_dt = _parse_dt(created_before)
+    target_level = (level or "").strip().lower()
+    target_category = (category or "").strip().lower()
+
+    parsed: list[dict] = []
     for raw in rows or []:
         if isinstance(raw, (bytes, bytearray)):
             raw = raw.decode("utf-8", errors="ignore")
         if isinstance(raw, str):
             try:
-                alerts.append(json.loads(raw))
+                parsed.append(json.loads(raw))
             except Exception:
-                alerts.append({"message": raw})
+                parsed.append({"message": raw})
         else:
-            alerts.append({"message": str(raw)})
+            parsed.append({"message": str(raw)})
 
-    total = await redis.llen(key)
-    return {"success": True, "alerts": alerts, "total": total, "limit": limit, "offset": offset}
+    filtered: list[dict] = []
+    stats_level: dict[str, int] = {}
+    stats_category: dict[str, int] = {}
+    for item in parsed:
+        item_level = str(item.get("level") or "").lower()
+        item_category = str(item.get("category") or "").lower()
+        item_dt = _parse_dt(item.get("created_at"))
+        if target_level and item_level != target_level:
+            continue
+        if target_category and item_category != target_category:
+            continue
+        if after_dt and item_dt and item_dt < after_dt:
+            continue
+        if before_dt and item_dt and item_dt > before_dt:
+            continue
+        filtered.append(item)
+        if item_level:
+            stats_level[item_level] = stats_level.get(item_level, 0) + 1
+        if item_category:
+            stats_category[item_category] = stats_category.get(item_category, 0) + 1
+
+    sliced = filtered[offset: offset + limit]
+    return {
+        "success": True,
+        "alerts": sliced,
+        "total_raw": int(raw_total or 0),
+        "total_filtered": len(filtered),
+        "limit": limit,
+        "offset": offset,
+        "stats": {
+            "by_level": stats_level,
+            "by_category": stats_category,
+        },
+    }
 
 
 @router.post("/plans/{plan_id}/reconcile")
