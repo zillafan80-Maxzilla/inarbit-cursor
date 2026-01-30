@@ -501,6 +501,11 @@ class OmsService:
         if os.getenv("OMS_ALERTS_ENABLED", "1").strip() in {"0", "false", "False"}:
             return
         redis = await get_redis()
+        history_limit = 500
+        try:
+            history_limit = int(os.getenv("OMS_ALERT_HISTORY_LIMIT", "500").strip() or "500")
+        except Exception:
+            history_limit = 500
         await redis.publish(
             f"alert:{user_id}",
             json.dumps(
@@ -516,6 +521,26 @@ class OmsService:
                 default=str,
             ),
         )
+        try:
+            key = f"audit:alert:{user_id}"
+            payload = json.dumps(
+                {
+                    "level": level,
+                    "source": "oms",
+                    "category": category,
+                    "message": message,
+                    "payload": payload or {},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            pipe = redis.pipeline()
+            pipe.lpush(key, payload)
+            pipe.ltrim(key, 0, max(0, history_limit - 1))
+            await pipe.execute()
+        except Exception:
+            pass
 
     async def _publish_order_update(self, *, user_id: str, order_id: str, status: str, data: dict) -> None:
         redis = await get_redis()
