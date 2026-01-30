@@ -359,7 +359,12 @@ impl Engine {
     async fn publish_signal(&self, signal: &Signal) {
         // 使用多路复用连接，兼容新版 redis 客户端
         if let Ok(mut conn) = self.redis.get_multiplexed_async_connection().await {
-            let channel = format!("signal:{:?}", signal.strategy_type).to_lowercase();
+            let channel = match std::env::var("ENGINE_USER_ID") {
+                Ok(user_id) if !user_id.is_empty() => {
+                    format!("signal:{}:{:?}", user_id, signal.strategy_type).to_lowercase()
+                }
+                _ => format!("signal:{:?}", signal.strategy_type).to_lowercase(),
+            };
             let payload = serde_json::to_string(signal).unwrap_or_default();
             let _: Result<(), _> = redis::cmd("PUBLISH")
                 .arg(&channel)

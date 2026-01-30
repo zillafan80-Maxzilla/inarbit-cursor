@@ -8,6 +8,8 @@ use tracing::{error, info};
 
 use crate::exchange::{ExchangeConnection, ExchangeId};
 use crate::strategy::Signal;
+use redis::AsyncCommands;
+use reqwest::Client;
 
 /// 订单方向
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -76,14 +78,23 @@ pub struct OrderExecutor {
     exchanges: HashMap<ExchangeId, Arc<ExchangeConnection>>,
     // 可选: 模拟模式
     simulation_mode: bool,
+    redis: Option<redis::Client>,
+    oms_client: Option<OmsClient>,
+    user_id: Option<String>,
 }
 
 impl OrderExecutor {
     /// 创建新执行器
-    pub fn new(exchanges: HashMap<ExchangeId, Arc<ExchangeConnection>>) -> Self {
+    pub fn new(
+        exchanges: HashMap<ExchangeId, Arc<ExchangeConnection>>,
+        redis: Option<redis::Client>,
+    ) -> Self {
         Self {
             exchanges,
             simulation_mode: true, // 默认模拟模式
+            redis,
+            oms_client: OmsClient::from_env(),
+            user_id: std::env::var("ENGINE_USER_ID").ok().filter(|v| !v.is_empty()),
         }
     }
 
@@ -109,10 +120,25 @@ impl OrderExecutor {
             ));
         }
 
-        // 真实执行逻辑
-        // TODO: 根据信号类型拆分订单并执行
-        
-        Err(anyhow::anyhow!("真实交易执行尚未实现"))
+        let decision_payload = self.build_decision_payload(&signal);
+        self.publish_signal(&signal, &decision_payload).await;
+        self.publish_decision(&decision_payload).await?;
+
+        if let Some(client) = &self.oms_client {
+            let idempotency_key = format!("engine:{}:{}", signal.strategy_id, signal.timestamp);
+            let success = client
+                .execute_latest(idempotency_key, self.simulation_mode)
+                .await?;
+            return Ok(ExecutionResult {
+                signal,
+                orders: vec![],
+                total_fee: 0.0,
+                net_profit: 0.0,
+                success,
+            });
+        }
+
+        Err(anyhow::anyhow!("OMS client not configured (ENGINE_OMS_BASE/ENGINE_OMS_TOKEN)"))
     }
 
     /// 模拟执行
@@ -219,6 +245,60 @@ impl OrderExecutor {
         Err(anyhow::anyhow!("订单发送未实现"))
     }
 
+    fn build_decision_payload(&self, signal: &Signal) -> serde_json::Value {
+        let symbols = parse_symbols_from_path(&signal.path);
+        let symbol = symbols.first().cloned().unwrap_or_default();
+        serde_json::json!({
+            "strategyType": format!("{:?}", signal.strategy_type).to_lowercase(),
+            "exchange": format!("{:?}", signal.exchange).to_lowercase(),
+            "symbol": symbol,
+            "direction": "neutral",
+            "expectedProfit": signal.expected_profit,
+            "expectedProfitRate": signal.profit_rate,
+            "estimatedExposure": 0.0,
+            "riskScore": calc_risk_score(signal.profit_rate),
+            "confidence": signal.confidence,
+            "timestamp": signal.timestamp,
+            "rawOpportunity": {
+                "path": signal.path,
+                "symbols": symbols,
+            }
+        })
+    }
+
+    async fn publish_signal(&self, signal: &Signal, payload: &serde_json::Value) {
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let Some(user_id) = &self.user_id else {
+            return;
+        };
+        if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+            let channel = format!(
+                "signal:{}:{}",
+                user_id,
+                format!("{:?}", signal.strategy_type).to_lowercase()
+            );
+            let _ = conn.publish::<_, _, ()>(channel, payload.to_string()).await;
+        }
+    }
+
+    async fn publish_decision(&self, payload: &serde_json::Value) -> Result<()> {
+        let Some(redis) = &self.redis else {
+            return Ok(());
+        };
+        let risk_score = payload
+            .get("riskScore")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let mut conn = redis.get_multiplexed_async_connection().await?;
+        let _: () = conn
+            .zadd("decisions:latest", payload.to_string(), risk_score)
+            .await?;
+        let _: () = conn.expire("decisions:latest", 10).await?;
+        Ok(())
+    }
+
     fn live_enabled(&self) -> bool {
         let execute_signals = std::env::var("ENGINE_EXECUTE_SIGNALS")
             .map(|v| matches!(v.as_str(), "1" | "true" | "True"))
@@ -258,6 +338,74 @@ impl OrderExecutor {
         Self {
             exchanges: self.exchanges.clone(),
             simulation_mode: self.simulation_mode,
+            redis: self.redis.clone(),
+            oms_client: self.oms_client.clone(),
+            user_id: self.user_id.clone(),
         }
     }
+}
+
+#[derive(Clone)]
+struct OmsClient {
+    base_url: String,
+    token: String,
+    http: Client,
+}
+
+impl OmsClient {
+    fn from_env() -> Option<Self> {
+        let base = std::env::var("ENGINE_OMS_BASE").ok()?;
+        let token = std::env::var("ENGINE_OMS_TOKEN").ok()?;
+        if base.is_empty() || token.is_empty() {
+            return None;
+        }
+        Some(Self {
+            base_url: base.trim_end_matches('/').to_string(),
+            token,
+            http: Client::new(),
+        })
+    }
+
+    async fn execute_latest(&self, idempotency_key: String, simulation_mode: bool) -> Result<bool> {
+        let trading_mode = if simulation_mode { "paper" } else { "live" };
+        let resp = self
+            .http
+            .post(format!("{}/api/v1/oms/execute_latest", self.base_url))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({
+                "trading_mode": trading_mode,
+                "confirm_live": !simulation_mode,
+                "idempotency_key": idempotency_key,
+                "limit": 1
+            }))
+            .send()
+            .await?;
+        let payload: serde_json::Value = resp.json().await?;
+        if !payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return Err(anyhow::anyhow!("OMS execute_latest failed: {:?}", payload));
+        }
+        Ok(true)
+    }
+}
+
+fn parse_symbols_from_path(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        return vec![];
+    }
+    let mut out = vec![];
+    for part in path.split("->") {
+        let symbol = part.trim().trim_matches(',');
+        if !symbol.is_empty() {
+            out.push(symbol.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.push(path.to_string());
+    }
+    out
+}
+
+fn calc_risk_score(profit_rate: f64) -> f64 {
+    let base = (1.0 - profit_rate).max(0.01);
+    (base * 1000.0).min(1000.0)
 }

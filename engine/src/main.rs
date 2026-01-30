@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     info!("已加载 {} 个策略", strategy_engine.strategy_count());
 
     // 初始化执行引擎
-    let mut executor = executor::OrderExecutor::new(exchanges.clone());
+    let mut executor = executor::OrderExecutor::new(exchanges.clone(), Some(redis_client.clone()));
     executor.set_simulation_mode(mode != "live");
 
     // 启动主循环

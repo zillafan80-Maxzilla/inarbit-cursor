@@ -56,9 +56,9 @@ description: inarbit 高频交易系统重构任务清单
 
 ### 阶段 5: Rust 引擎完善 🔄
 
-- [ ] executor 真实下单逻辑补全
-- [ ] risk 模块检查逻辑补全
-- [ ] 与 Python/Redis 的运行时联调
+- [x] executor 真实下单逻辑补全
+- [x] risk 模块检查逻辑补全
+- [x] 与 Python/Redis 的运行时联调
 
 ### 阶段 6: 测试与文档 🔄
 
@@ -271,3 +271,4 @@ cd engine && cargo build --release
 - 风控数据缓存：RiskManager/Exposure/Rebalancer 增加 portfolio/balances 缓存；risk/status 返回 keys=drawdown/exposure/total_equity
 - 风控配置化：新增 /api/v1/risk/config GET/PUT 与 /api/v1/risk/reload_config
 - 风控流程验证：panic 触发 trading_allowed=False 且 panic_triggered=True，reset 后恢复；reload_keys 返回成功
+- Rust 引擎联调：executor 写入 decisions:latest、调用 OMS execute_latest；风险检查对接 /api/v1/risk/status；signal 发布兼容 signal:{user_id}:{strategy_type}
