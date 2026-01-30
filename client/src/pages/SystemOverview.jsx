@@ -93,6 +93,10 @@ const SystemOverview = () => {
                                 <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>行情数据</div>
                                 <div style={{ fontSize: '12px', fontWeight: 600 }}>{metrics?.market_data?.symbols_spot ?? 0} / {metrics?.market_data?.symbols_futures ?? 0}</div>
                             </div>
+                            <div>
+                                <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>市场状态</div>
+                                <div style={{ fontSize: '12px', fontWeight: 600 }}>{metrics?.market_regime?.regime || '-'}</div>
+                            </div>
                         </div>
                     </div>
 

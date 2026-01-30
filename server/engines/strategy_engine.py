@@ -14,6 +14,7 @@ from uuid import UUID
 
 from ..db import get_pg_pool, get_redis
 from ..services.config_service import get_config_service, TradingPair
+from ..services.market_regime_service import MarketRegimeService
 from ..services.market_data_repository import MarketDataRepository
 from ..engines.arbitrage_algorithms import BellmanFordGraph, FundingRateArbitrage, TriangularArbitrage
 
@@ -47,6 +48,7 @@ class StrategyEngine:
         self._tasks: List[asyncio.Task] = []
         self._task_map: Dict[str, asyncio.Task] = {}
         self._config_service = None
+        self._regime_service = MarketRegimeService()
         self.user_id: Optional[UUID] = None
         self._scan_interval_cache: Dict[str, tuple[float, float]] = {}
         self._scan_interval_ttl_seconds = 30.0
@@ -286,10 +288,14 @@ class StrategyEngine:
                 if not config:
                     return
             
+            base_currencies = config.get("base_currencies", ["USDT", "BTC", "ETH"])
+            regime = await self._get_regime([f"{base}/USDT" for base in base_currencies if base])
+            if not _regime_allows_strategy(config, regime):
+                return
+
             min_profit_rate = float(config.get("min_profit_rate", 0.001))
             fee_rate = float(config.get("fee_rate", 0.0004))
             exchange_id = str(config.get("exchange_id") or "binance")
-            base_currencies = config.get("base_currencies", ["USDT", "BTC", "ETH"])
 
             service = await get_config_service()
             pairs = await service.get_pairs_for_exchange(exchange_id)
@@ -387,6 +393,12 @@ class StrategyEngine:
                         cfg = {}
                 if not cfg.get("base_currencies"):
                     cfg["base_currencies"] = await self._get_top_base_currencies(default_exchange_id, limit=3)
+                if "regime_weights" not in cfg:
+                    cfg["regime_weights"] = _default_regime_weights()
+                if "allow_short" not in cfg:
+                    cfg["allow_short"] = False
+                if "max_leverage" not in cfg:
+                    cfg["max_leverage"] = 1.0
                 await conn.execute(
                     """
                     UPDATE strategy_configs
@@ -402,6 +414,9 @@ class StrategyEngine:
                 "min_profit_rate": 0.001,
                 "fee_rate": 0.0004,
                 "base_currencies": await self._get_top_base_currencies(default_exchange_id, limit=3),
+                "regime_weights": _default_regime_weights(),
+                "allow_short": False,
+                "max_leverage": 1.0,
             }
             await conn.execute(
                 """
@@ -432,6 +447,13 @@ class StrategyEngine:
         except Exception:
             pass
         return "binance"
+
+    async def _get_regime(self, symbols: Optional[list[str]] = None) -> str:
+        try:
+            snapshot = await self._regime_service.refresh(symbols)
+            return snapshot.regime
+        except Exception:
+            return "UNKNOWN"
 
     async def _load_pairs_from_redis(self, exchange_id: str) -> List[TradingPair]:
         try:
@@ -518,6 +540,10 @@ class StrategyEngine:
                 if not config:
                     return
 
+            regime = await self._get_regime()
+            if not _regime_allows_strategy(config, regime):
+                return
+
             cfg_min_profit = float(config.get("min_profit_rate", 0.001))
             cfg_fee_rate = float(config.get("fee_rate", 0.0004))
             exchange_id = str(config.get("exchange_id") or "binance")
@@ -591,6 +617,10 @@ class StrategyEngine:
                 if not config:
                     return
 
+            regime = await self._get_regime()
+            if not _regime_allows_strategy(config, regime):
+                return
+
             min_profit_rate = float(config.get("min_profit_rate", 0.001))
             exchange_id = str(config.get("exchange_id") or "binance")
 
@@ -648,6 +678,10 @@ class StrategyEngine:
                 config = await self._get_strategy_config_for_user(conn, strategy_id)
                 if not config:
                     return
+
+            regime = await self._get_regime()
+            if not _regime_allows_strategy(config, regime):
+                return
             
             from ..exchange.binance_connector import BinanceConnector
             from ..engines.strategies import GridStrategy
@@ -680,6 +714,10 @@ class StrategyEngine:
                 config = await self._get_strategy_config_for_user(conn, strategy_id)
                 if not config:
                     return
+
+            regime = await self._get_regime()
+            if not _regime_allows_strategy(config, regime):
+                return
             
             from ..exchange.binance_connector import BinanceConnector
             from ..engines.strategies import PairTradingStrategy
@@ -838,6 +876,36 @@ async def get_strategy_engine_for_user(user_id: UUID) -> StrategyEngine:
     if engine.user_id != user_id or not engine.strategies:
         await engine.initialize_for_user(user_id)
     return engine
+
+
+def _regime_allows_strategy(config: dict, regime: str) -> bool:
+    weights = config.get("regime_weights") or {}
+    normalized = {
+        "RANGE": 1.0,
+        "DOWNTREND": 0.6,
+        "UPTREND": 0.7,
+        "STRESS": 0.2,
+    }
+    if isinstance(weights, dict):
+        for key, value in weights.items():
+            if not key:
+                continue
+            k = str(key).upper()
+            try:
+                normalized[k] = float(value)
+            except Exception:
+                continue
+    value = normalized.get(str(regime).upper(), 1.0)
+    return value > 0
+
+
+def _default_regime_weights() -> dict:
+    return {
+        "RANGE": 1.0,
+        "DOWNTREND": 0.6,
+        "UPTREND": 0.7,
+        "STRESS": 0.2,
+    }
 
 
 # ============================================

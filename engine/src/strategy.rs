@@ -139,6 +139,14 @@ impl Engine {
                         "bases": selected_bases,
                         "exchange_id": format!("{:?}", exchange_id).to_lowercase(),
                         "default": true,
+                        "regime_weights": {
+                            "RANGE": 1.0,
+                            "DOWNTREND": 0.6,
+                            "UPTREND": 0.7,
+                            "STRESS": 0.2
+                        },
+                        "allow_short": false,
+                        "max_leverage": 1.0
                     }),
                 };
 

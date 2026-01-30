@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Set
 from decimal import Decimal
 
-from ..db import get_redis
+from ..db import get_redis, get_pg_pool
 from .market_data_repository import MarketDataRepository
+from .market_regime_service import MarketRegimeService
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ class Decision:
     confidence: Decimal
     timestamp_ms: int
     raw_opportunity: dict  # 原始机会数据
+    regime: Optional[str] = None
+    routing_weight: Optional[Decimal] = None
 
     def to_redis_member(self) -> str:
         return json.dumps(
@@ -57,6 +60,8 @@ class Decision:
                 "confidence": str(self.confidence),
                 "timestamp": self.timestamp_ms,
                 "rawOpportunity": self.raw_opportunity,
+                "regime": self.regime,
+                "routingWeight": str(self.routing_weight) if self.routing_weight is not None else None,
             },
             ensure_ascii=False,
         )
@@ -89,10 +94,17 @@ class DecisionService:
             "blacklist_symbols": [],
         }
         self._repo = MarketDataRepository()
+        self._regime_service = MarketRegimeService(exchange_id=exchange_id)
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._last_log_ts: float = 0.0
         self._last_decision_count: Optional[int] = None
+        self._routing_cache: dict = {}
+        self._routing_cache_ts: int = 0
+        try:
+            self._routing_cache_ttl_ms = int(os.getenv("DECISION_ROUTING_CACHE_TTL_MS", "10000").strip() or "10000")
+        except Exception:
+            self._routing_cache_ttl_ms = 10000
 
         self._constraints_key = "decision:constraints:human"
         self._auto_constraints_key = "decision:constraints:auto"
@@ -219,6 +231,7 @@ class DecisionService:
         tri_raw, cc_raw = await pipe.execute()
 
         await self._refresh_auto_overlay(tri_raw, cc_raw)
+        await self._refresh_strategy_routing()
         candidates: List[Decision] = []
 
         # 解析三角套利机会
@@ -385,6 +398,7 @@ class DecisionService:
 
     def _effective_constraints_snapshot(self) -> dict:
         return {
+            "regime": self._auto_overlay.get("regime"),
             "max_exposure_per_symbol": str(self._effective_max_exposure_per_symbol()),
             "max_total_exposure": str(self._constraints.max_total_exposure),
             "min_profit_rate": str(self._effective_min_profit_rate()),
@@ -433,6 +447,7 @@ class DecisionService:
                 "min_profit_rate_boost": "0",
                 "exposure_multiplier": "1",
                 "blacklist_symbols": [],
+                "regime": "UNKNOWN",
             }
             return
 
@@ -499,6 +514,17 @@ class DecisionService:
         elif avg_spread > float(self._constraints.max_spread_rate) * 0.7:
             boost += (self._constraints.min_profit_rate * Decimal('0.5'))
 
+        regime_snapshot = await self._regime_service.refresh(symbols)
+        if regime_snapshot.regime == "STRESS":
+            boost += self._constraints.min_profit_rate
+            mult = min(mult, Decimal('0.3'))
+        elif regime_snapshot.regime == "DOWNTREND":
+            boost += (self._constraints.min_profit_rate * Decimal('0.5'))
+            mult = min(mult, Decimal('0.6'))
+        elif regime_snapshot.regime == "UPTREND":
+            boost += (self._constraints.min_profit_rate * Decimal('0.2'))
+            mult = min(mult, Decimal('0.8'))
+
         self._auto_overlay = {
             "timestamp_ms": now_ms,
             "min_profit_rate_boost": str(boost),
@@ -506,6 +532,8 @@ class DecisionService:
             "blacklist_symbols": sorted(low_liq_bases),
             "avg_data_age_ms": avg_age,
             "avg_spread_rate": avg_spread,
+            "regime": regime_snapshot.regime,
+            "regime_metrics": regime_snapshot.to_dict(),
         }
 
     async def _check_market_safety(self, base: str) -> bool:
@@ -556,9 +584,31 @@ class DecisionService:
 
     def _apply_global_constraints(self, candidates: List[Decision]) -> List[Decision]:
         """全局约束：去重同币种、控制总敞口、按风险排序"""
+        routed = []
+        regime = str(self._auto_overlay.get("regime") or "RANGE").upper()
+        for d in candidates:
+            routing = self._get_routing_for_strategy(d.strategy_type)
+            allow_short = routing.get("allow_short", True)
+            if not allow_short and "short" in (d.direction or ""):
+                continue
+            weight = routing.get("regime_weights", {}).get(regime, 1.0)
+            try:
+                weight_value = float(weight)
+            except Exception:
+                weight_value = 1.0
+            if weight_value <= 0:
+                continue
+            d.routing_weight = Decimal(str(weight_value))
+            d.regime = regime
+            try:
+                d.risk_score = (d.risk_score / Decimal(str(weight_value))).quantize(Decimal("0.0001"))
+            except Exception:
+                pass
+            routed.append(d)
+
         # 去重：同一币种只保留风险评分最低的
         best_by_symbol: Dict[str, Decision] = {}
-        for d in candidates:
+        for d in routed:
             base = d.symbol.split("/")[0]
             if base not in best_by_symbol or d.risk_score < best_by_symbol[base].risk_score:
                 best_by_symbol[base] = d
@@ -573,6 +623,75 @@ class DecisionService:
         # 按风险评分排序（风险越小越优先）
         filtered.sort(key=lambda x: (x.risk_score, -x.expected_profit_rate))
         return filtered
+
+    async def _refresh_strategy_routing(self) -> None:
+        now_ms = int(time.time() * 1000)
+        if self._routing_cache and (now_ms - self._routing_cache_ts) < self._routing_cache_ttl_ms:
+            return
+        try:
+            pool = await get_pg_pool()
+            async with pool.acquire() as conn:
+                user_id = await conn.fetchval("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+                if not user_id:
+                    return
+                rows = await conn.fetch(
+                    """
+                    SELECT strategy_type, config, is_enabled
+                    FROM strategy_configs
+                    WHERE user_id = $1
+                    """,
+                    user_id,
+                )
+        except Exception:
+            return
+
+        routing: dict = {}
+        for row in rows:
+            cfg = row.get("config") or {}
+            if isinstance(cfg, str):
+                try:
+                    cfg = json.loads(cfg)
+                except Exception:
+                    cfg = {}
+            routing[str(row["strategy_type"])] = {
+                "allow_short": bool(cfg.get("allow_short", True)),
+                "max_leverage": float(cfg.get("max_leverage", 1.0)),
+                "regime_weights": _normalize_regime_weights(cfg.get("regime_weights")),
+                "is_enabled": bool(row.get("is_enabled")),
+            }
+        self._routing_cache = routing
+        self._routing_cache_ts = now_ms
+
+    def _get_routing_for_strategy(self, strategy_type: str) -> dict:
+        normalized = str(strategy_type or "").lower()
+        if normalized == "cashcarry":
+            normalized = "funding_rate"
+        return self._routing_cache.get(normalized, {
+            "allow_short": True,
+            "max_leverage": 1.0,
+            "regime_weights": _normalize_regime_weights({}),
+            "is_enabled": True,
+        })
+
+
+def _normalize_regime_weights(weights: Optional[dict]) -> dict:
+    base = {
+        "RANGE": 1.0,
+        "DOWNTREND": 0.6,
+        "UPTREND": 0.7,
+        "STRESS": 0.2,
+    }
+    if not isinstance(weights, dict):
+        return base
+    for key, value in weights.items():
+        if not key:
+            continue
+        k = str(key).upper()
+        try:
+            base[k] = float(value)
+        except Exception:
+            continue
+    return base
 
     async def _calculate_risk_score(self, base: str, exposure: Decimal, profit_rate: Decimal) -> Decimal:
         """动态风险评分（机器人自行定义）"""

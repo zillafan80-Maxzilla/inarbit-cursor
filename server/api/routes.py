@@ -5,12 +5,13 @@ REST API 路由定义
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from uuid import UUID
 from datetime import datetime
 import time
 from functools import wraps
 import os
+import json
 
 from ..db import get_pg_pool, get_redis
 from ..engines.strategy_engine import get_strategy_engine_for_user
@@ -52,6 +53,9 @@ class StrategyConfigCreate(BaseModel):
     capital_percent: float = 20.0
     per_trade_limit: float = 100.0
     config: dict = {}
+    allow_short: Optional[bool] = None
+    max_leverage: Optional[float] = None
+    regime_weights: Optional[Dict[str, float]] = None
 
 
 class StrategyConfigUpdate(BaseModel):
@@ -62,6 +66,9 @@ class StrategyConfigUpdate(BaseModel):
     capital_percent: Optional[float] = None
     per_trade_limit: Optional[float] = None
     config: Optional[dict] = None
+    allow_short: Optional[bool] = None
+    max_leverage: Optional[float] = None
+    regime_weights: Optional[Dict[str, float]] = None
 
 
 class StrategyConfigResponse(BaseModel):
@@ -77,6 +84,26 @@ class StrategyConfigResponse(BaseModel):
     total_trades: int
     total_profit: float
     last_run_at: Optional[datetime]
+
+
+def _normalize_regime_weights(weights: Optional[dict]) -> dict:
+    base = {
+        "RANGE": 1.0,
+        "DOWNTREND": 0.6,
+        "UPTREND": 0.7,
+        "STRESS": 0.2,
+    }
+    if not isinstance(weights, dict):
+        return base
+    for key, value in weights.items():
+        if not key:
+            continue
+        k = str(key).upper()
+        try:
+            base[k] = float(value)
+        except Exception:
+            continue
+    return base
 
 
 # ============================================
@@ -215,6 +242,13 @@ async def create_strategy(config: StrategyConfigCreate, user: CurrentUser = Depe
     pool = await get_pg_pool()
     
     try:
+        payload = dict(config.config or {})
+        if config.allow_short is not None:
+            payload["allow_short"] = bool(config.allow_short)
+        if config.max_leverage is not None:
+            payload["max_leverage"] = float(config.max_leverage)
+        if config.regime_weights is not None:
+            payload["regime_weights"] = _normalize_regime_weights(config.regime_weights)
         row = await pool.fetchrow("""
             INSERT INTO strategy_configs 
                 (user_id, strategy_type, name, description, priority,
@@ -225,7 +259,7 @@ async def create_strategy(config: StrategyConfigCreate, user: CurrentUser = Depe
                       total_trades, total_profit, last_run_at
         """, user.id, config.strategy_type, config.name, config.description,
              config.priority, config.capital_percent, config.per_trade_limit,
-             config.config)
+             payload)
         try:
             engine = await get_strategy_engine_for_user(user.id)
             await engine.reload_for_user(user.id)
@@ -245,8 +279,31 @@ async def update_strategy(strategy_id: UUID, update: StrategyConfigUpdate, user:
     updates = []
     values = []
     idx = 1
+    payload = update.dict(exclude_none=True)
+    if any(k in payload for k in ("allow_short", "max_leverage", "regime_weights")):
+        existing = await pool.fetchval(
+            "SELECT config FROM strategy_configs WHERE id = $1 AND user_id = $2",
+            strategy_id,
+            user.id,
+        )
+        cfg = existing or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg)
+            except Exception:
+                cfg = {}
+        if payload.get("allow_short") is not None:
+            cfg["allow_short"] = bool(payload.get("allow_short"))
+        if payload.get("max_leverage") is not None:
+            cfg["max_leverage"] = float(payload.get("max_leverage"))
+        if payload.get("regime_weights") is not None:
+            cfg["regime_weights"] = _normalize_regime_weights(payload.get("regime_weights"))
+        payload["config"] = cfg
+        payload.pop("allow_short", None)
+        payload.pop("max_leverage", None)
+        payload.pop("regime_weights", None)
     
-    for field, value in update.dict(exclude_none=True).items():
+    for field, value in payload.items():
         updates.append(f"{field} = ${idx}")
         values.append(value)
         idx += 1

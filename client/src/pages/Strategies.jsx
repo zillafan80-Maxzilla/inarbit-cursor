@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useStrategies, usePnLSummary, useSignals } from '../api/hooks';
-import { configAPI, strategyAPI } from '../api/client';
+import { configAPI, strategyAPI, systemAPI } from '../api/client';
 
 // 策略类型定义
 const STRATEGY_TYPES = {
@@ -46,18 +46,27 @@ const STRATEGY_TYPES = {
 };
 
 const OPPORTUNITY_TYPES = ['graph', 'grid', 'pair'];
+const DEFAULT_REGIME_WEIGHTS = {
+    RANGE: 1.0,
+    DOWNTREND: 0.6,
+    UPTREND: 0.7,
+    STRESS: 0.2,
+};
 
 const Strategies = () => {
     const { strategies, loading, error, refresh } = useStrategies();
     const { summary } = usePnLSummary();
     const { signals } = useSignals();
     const [updating, setUpdating] = useState(null);
+    const [savingStrategy, setSavingStrategy] = useState({});
     const [opportunityConfigs, setOpportunityConfigs] = useState({});
     const [opportunityLoading, setOpportunityLoading] = useState(false);
     const [opportunitySaving, setOpportunitySaving] = useState({});
     const [opportunityHistory, setOpportunityHistory] = useState({});
     const [opportunityTemplates, setOpportunityTemplates] = useState({});
     const [templateDrafts, setTemplateDrafts] = useState({});
+    const [regimeMetrics, setRegimeMetrics] = useState(null);
+    const [strategyDrafts, setStrategyDrafts] = useState({});
 
     // 切换策略开关
     const toggleStrategy = async (id) => {
@@ -98,6 +107,45 @@ const Strategies = () => {
             alert(`加载机会配置失败: ${err.message}`);
         } finally {
             setOpportunityLoading(false);
+        }
+    };
+
+    const loadRegimeMetrics = async () => {
+        try {
+            const res = await systemAPI.metrics();
+            setRegimeMetrics(res?.data?.market_regime || null);
+        } catch (err) {
+            setRegimeMetrics(null);
+        }
+    };
+
+    const saveStrategyRouting = async (strategyId) => {
+        const strategy = strategies.find((s) => s.id === strategyId);
+        if (!strategy) return;
+        const draft = strategyDrafts[strategyId] || {};
+        const parsedLeverage = Number(draft.max_leverage);
+        const maxLeverage = Number.isFinite(parsedLeverage) ? parsedLeverage : 1;
+        const weightInput = draft.regime_weights || {};
+        const normalizedWeights = Object.keys(DEFAULT_REGIME_WEIGHTS).reduce((acc, key) => {
+            const raw = weightInput[key];
+            const parsed = Number(raw);
+            acc[key] = Number.isFinite(parsed) ? parsed : DEFAULT_REGIME_WEIGHTS[key];
+            return acc;
+        }, {});
+        const merged = {
+            ...(strategy.config || {}),
+            allow_short: !!draft.allow_short,
+            max_leverage: maxLeverage,
+            regime_weights: normalizedWeights,
+        };
+        setSavingStrategy((prev) => ({ ...prev, [strategyId]: true }));
+        try {
+            await strategyAPI.update(strategyId, { config: merged });
+            await refresh();
+        } catch (err) {
+            alert(`保存策略路由失败: ${err.message}`);
+        } finally {
+            setSavingStrategy((prev) => ({ ...prev, [strategyId]: false }));
         }
     };
 
@@ -201,7 +249,27 @@ const Strategies = () => {
 
     useEffect(() => {
         loadOpportunityConfigs();
+        loadRegimeMetrics();
     }, []);
+
+    useEffect(() => {
+        const drafts = {};
+        strategies.forEach((s) => {
+            const cfg = s.config || {};
+            const weights = { ...DEFAULT_REGIME_WEIGHTS, ...(cfg.regime_weights || {}) };
+            drafts[s.id] = {
+                allow_short: cfg.allow_short ?? false,
+                max_leverage: cfg.max_leverage ?? 1,
+                regime_weights: {
+                    RANGE: weights.RANGE,
+                    DOWNTREND: weights.DOWNTREND,
+                    UPTREND: weights.UPTREND,
+                    STRESS: weights.STRESS,
+                },
+            };
+        });
+        setStrategyDrafts(drafts);
+    }, [strategies]);
 
     if (loading) {
         return (
@@ -251,6 +319,10 @@ const Strategies = () => {
                         {summary.daily_pnl >= 0 ? '+' : ''}{summary.daily_pnl?.toFixed(2) || '0'} USDT
                     </div>
                 </div>
+                <div className="stat-box">
+                    <div className="stat-label">市场状态</div>
+                    <div className="stat-num">{regimeMetrics?.regime || '-'}</div>
+                </div>
             </div>
 
             {/* 策略列表 - 横向布局 */}
@@ -260,102 +332,154 @@ const Strategies = () => {
                         const typeInfo = STRATEGY_TYPES[strategy.strategy_type] || {};
                         const signalCount = getStrategyStats(strategy.strategy_type);
                         const isUpdating = updating === strategy.id;
+                        const draft = strategyDrafts[strategy.id] || {};
 
                         return (
-                            <div
-                                key={strategy.id}
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '12px',
-                                    padding: '12px 16px',
-                                    borderBottom: '1px solid rgba(0,0,0,0.05)',
-                                    background: strategy.is_enabled ? 'rgba(133, 153, 0, 0.03)' : 'transparent'
-                                }}
-                            >
-                                {/* 左侧：图标 */}
-                                <div style={{
-                                    width: '36px',
-                                    height: '36px',
-                                    borderRadius: '8px',
-                                    background: `${typeInfo.color}15`,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    fontSize: '16px',
-                                    flexShrink: 0
-                                }}>
-                                    {typeInfo.icon}
-                                </div>
-
-                                {/* 中左：名称+描述 */}
-                                <div style={{ flex: 2, minWidth: 0 }}>
-                                    <div style={{
-                                        fontSize: '12px',
-                                        fontWeight: 600,
-                                        color: 'var(--text-primary)',
+                            <div key={strategy.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                                <div
+                                    style={{
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: '6px'
-                                    }}>
-                                        {strategy.name || typeInfo.name}
-                                        <span style={{
-                                            fontSize: '8px',
-                                            padding: '2px 6px',
-                                            borderRadius: '4px',
-                                            background: strategy.is_enabled ? 'rgba(133, 153, 0, 0.15)' : 'rgba(0,0,0,0.05)',
-                                            color: strategy.is_enabled ? 'var(--color-success)' : 'var(--text-muted)'
-                                        }}>
-                                            {strategy.is_enabled ? '● 运行中' : '○ 已停止'}
-                                        </span>
-                                    </div>
+                                        gap: '12px',
+                                        padding: '12px 16px',
+                                        background: strategy.is_enabled ? 'rgba(133, 153, 0, 0.03)' : 'transparent'
+                                    }}
+                                >
+                                    {/* 左侧：图标 */}
                                     <div style={{
-                                        fontSize: '9px',
-                                        color: 'var(--text-muted)',
-                                        marginTop: '2px',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap'
+                                        width: '36px',
+                                        height: '36px',
+                                        borderRadius: '8px',
+                                        background: `${typeInfo.color}15`,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: '16px',
+                                        flexShrink: 0
                                     }}>
-                                        {typeInfo.description}
+                                        {typeInfo.icon}
+                                    </div>
+
+                                    {/* 中左：名称+描述 */}
+                                    <div style={{ flex: 2, minWidth: 0 }}>
+                                        <div style={{
+                                            fontSize: '12px',
+                                            fontWeight: 600,
+                                            color: 'var(--text-primary)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px'
+                                        }}>
+                                            {strategy.name || typeInfo.name}
+                                            <span style={{
+                                                fontSize: '8px',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                background: strategy.is_enabled ? 'rgba(133, 153, 0, 0.15)' : 'rgba(0,0,0,0.05)',
+                                                color: strategy.is_enabled ? 'var(--color-success)' : 'var(--text-muted)'
+                                            }}>
+                                                {strategy.is_enabled ? '● 运行中' : '○ 已停止'}
+                                            </span>
+                                        </div>
+                                        <div style={{
+                                            fontSize: '9px',
+                                            color: 'var(--text-muted)',
+                                            marginTop: '2px',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap'
+                                        }}>
+                                            {typeInfo.description}
+                                        </div>
+                                    </div>
+
+                                    {/* 中右：参数 */}
+                                    <div style={{
+                                        flex: 1,
+                                        display: 'flex',
+                                        gap: '16px',
+                                        fontSize: '10px',
+                                        color: 'var(--text-secondary)'
+                                    }}>
+                                        <div>
+                                            <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>信号</div>
+                                            <div style={{ fontWeight: 600 }}>{signalCount}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>资金%</div>
+                                            <div style={{ fontWeight: 600 }}>{(strategy.capital_percent * 100).toFixed(0)}%</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>优先级</div>
+                                            <div style={{ fontWeight: 600 }}>优先级 {strategy.priority}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* 右侧：操作按钮 */}
+                                    <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                                        <button
+                                            onClick={() => toggleStrategy(strategy.id)}
+                                            disabled={isUpdating}
+                                            className={`btn btn-sm ${strategy.is_enabled ? 'btn-danger' : 'btn-primary'}`}
+                                            style={{ minWidth: '60px' }}
+                                        >
+                                            {isUpdating ? '...' : (strategy.is_enabled ? '停止' : '启动')}
+                                        </button>
+                                        <button
+                                            onClick={() => saveStrategyRouting(strategy.id)}
+                                            className="btn btn-sm btn-secondary"
+                                            disabled={savingStrategy[strategy.id]}
+                                        >
+                                            {savingStrategy[strategy.id] ? '保存中' : '保存'}
+                                        </button>
                                     </div>
                                 </div>
-
-                                {/* 中右：参数 */}
-                                <div style={{
-                                    flex: 1,
-                                    display: 'flex',
-                                    gap: '16px',
-                                    fontSize: '10px',
-                                    color: 'var(--text-secondary)'
-                                }}>
-                                    <div>
-                                        <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>信号</div>
-                                        <div style={{ fontWeight: 600 }}>{signalCount}</div>
+                                <div style={{ padding: '0 16px 12px', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!draft.allow_short}
+                                                onChange={(e) => setStrategyDrafts((prev) => ({
+                                                    ...prev,
+                                                    [strategy.id]: { ...prev[strategy.id], allow_short: e.target.checked },
+                                                }))}
+                                            />
+                                            允许做空
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            最大杠杆
+                                            <input
+                                                className="form-input"
+                                                value={draft.max_leverage ?? 1}
+                                                onChange={(e) => setStrategyDrafts((prev) => ({
+                                                    ...prev,
+                                                    [strategy.id]: { ...prev[strategy.id], max_leverage: e.target.value },
+                                                }))}
+                                                style={{ width: '70px', height: '24px' }}
+                                            />
+                                        </label>
+                                        {['RANGE', 'DOWNTREND', 'UPTREND', 'STRESS'].map((key) => (
+                                            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {key}
+                                                <input
+                                                    className="form-input"
+                                                    value={draft.regime_weights?.[key] ?? DEFAULT_REGIME_WEIGHTS[key]}
+                                                    onChange={(e) => setStrategyDrafts((prev) => ({
+                                                        ...prev,
+                                                        [strategy.id]: {
+                                                            ...prev[strategy.id],
+                                                            regime_weights: {
+                                                                ...(prev[strategy.id]?.regime_weights || {}),
+                                                                [key]: e.target.value,
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={{ width: '60px', height: '24px' }}
+                                                />
+                                            </label>
+                                        ))}
                                     </div>
-                                    <div>
-                                        <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>资金%</div>
-                                        <div style={{ fontWeight: 600 }}>{(strategy.capital_percent * 100).toFixed(0)}%</div>
-                                    </div>
-                                    <div>
-                                        <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>优先级</div>
-                                        <div style={{ fontWeight: 600 }}>优先级 {strategy.priority}</div>
-                                    </div>
-                                </div>
-
-                                {/* 右侧：操作按钮 */}
-                                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                                    <button
-                                        onClick={() => toggleStrategy(strategy.id)}
-                                        disabled={isUpdating}
-                                        className={`btn btn-sm ${strategy.is_enabled ? 'btn-danger' : 'btn-primary'}`}
-                                        style={{ minWidth: '60px' }}
-                                    >
-                                        {isUpdating ? '...' : (strategy.is_enabled ? '停止' : '启动')}
-                                    </button>
-                                    <button className="btn btn-sm btn-secondary">
-                                        ⚙
-                                    </button>
                                 </div>
                             </div>
                         );

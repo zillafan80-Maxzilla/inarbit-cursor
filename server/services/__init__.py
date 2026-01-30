@@ -22,6 +22,7 @@ class ServiceContainer:
     _triangular_opportunity_service: Optional['TriangularOpportunityService'] = None
     _cashcarry_opportunity_service: Optional['CashCarryOpportunityService'] = None
     _decision_service: Optional['DecisionService'] = None
+    _market_regime_service: Optional['MarketRegimeService'] = None
     
     @classmethod
     def initialize(cls):
@@ -38,6 +39,7 @@ class ServiceContainer:
         from .triangular_opportunity_service import TriangularOpportunityService
         from .cashcarry_opportunity_service import CashCarryOpportunityService
         from .decision_service import DecisionService
+        from .market_regime_service import MarketRegimeService
         
         cls._exchange_service = ExchangeService()
         cls._order_service = OrderService()
@@ -46,6 +48,7 @@ class ServiceContainer:
         cls._triangular_opportunity_service = TriangularOpportunityService()
         cls._cashcarry_opportunity_service = CashCarryOpportunityService()
         cls._decision_service = DecisionService()
+        cls._market_regime_service = MarketRegimeService()
         
         logger.info("✅ 服务容器初始化完成")
     
@@ -104,6 +107,14 @@ class ServiceContainer:
             from .decision_service import DecisionService
             cls._decision_service = DecisionService()
         return cls._decision_service
+
+    @classmethod
+    def get_market_regime_service(cls):
+        """获取市场状态服务"""
+        if cls._market_regime_service is None:
+            from .market_regime_service import MarketRegimeService
+            cls._market_regime_service = MarketRegimeService()
+        return cls._market_regime_service
     
     @classmethod
     def reset(cls):
@@ -118,6 +129,7 @@ class ServiceContainer:
         cls._triangular_opportunity_service = None
         cls._cashcarry_opportunity_service = None
         cls._decision_service = None
+        cls._market_regime_service = None
 
 
 # 导出所有服务
@@ -129,6 +141,7 @@ from .triangular_opportunity_service import TriangularOpportunityService
 from .cashcarry_opportunity_service import CashCarryOpportunityService
 from .decision_service import DecisionService
 from .oms_service import OmsService
+from .market_regime_service import MarketRegimeService
 
 def get_decision_service():
     """快捷获取决策服务实例"""
@@ -143,5 +156,6 @@ __all__ = [
     "CashCarryOpportunityService",
     "DecisionService",
     "OmsService",
+    "MarketRegimeService",
     "get_decision_service",
 ]

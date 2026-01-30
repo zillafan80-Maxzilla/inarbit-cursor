@@ -120,12 +120,23 @@ async def reset_system(request: ResetRequest, user: CurrentUser = Depends(requir
                     ('pair', '配对交易', '相关币种价差回归套利', 4),
                     ('grid', '网格交易', '区间内高抛低吸', 5),
                 ]
+                default_weights = {
+                    "RANGE": 1.0,
+                    "DOWNTREND": 0.6,
+                    "UPTREND": 0.7,
+                    "STRESS": 0.2,
+                }
                 
                 for strategy_type, name, description, priority in strategies:
+                    cfg = {
+                        "regime_weights": default_weights,
+                        "allow_short": strategy_type in {"funding_rate", "pair"},
+                        "max_leverage": 1.0,
+                    }
                     await conn.execute("""
                         INSERT INTO strategy_configs (user_id, strategy_type, name, description, priority, config)
-                        VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
-                    """, user.id, strategy_type, name, description, priority)
+                        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                    """, user.id, strategy_type, name, description, priority, json.dumps(cfg, ensure_ascii=False))
         
         try:
             redis = await get_redis()
@@ -207,6 +218,7 @@ async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
         pipe.hgetall("metrics:cashcarry_service")
         pipe.hgetall("metrics:market_data_service")
         pipe.hgetall("metrics:oms_service")
+        pipe.hgetall("metrics:market_regime")
         pipe.scard("symbols:ticker:binance")
         pipe.scard("symbols:ticker_futures:binance")
         pipe.scard("symbols:funding:binance")
@@ -222,6 +234,7 @@ async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
                 cashcarry_metrics,
                 market_data_metrics,
                 oms_metrics,
+                market_regime_metrics,
                 spot_symbol_count,
                 futures_symbol_count,
                 funding_symbol_count,
@@ -237,6 +250,7 @@ async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
                 "cashcarry_metrics": {},
                 "market_data_metrics": {},
                 "oms_metrics": {},
+                "market_regime": {},
                 "market_data": {
                     "symbols_spot": 0,
                     "symbols_futures": 0,
@@ -288,6 +302,7 @@ async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
                 "cashcarry_metrics": cashcarry_metrics or {},
                 "market_data_metrics": market_data_metrics or {},
                 "oms_metrics": oms_metrics or {},
+                "market_regime": market_regime_metrics or {},
                 "market_data": {
                     "symbols_spot": int(spot_symbol_count or 0),
                     "symbols_futures": int(futures_symbol_count or 0),

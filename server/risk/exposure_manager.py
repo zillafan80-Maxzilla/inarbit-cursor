@@ -26,10 +26,13 @@ class ExposureManager:
         # 风控参数 (遗留模块，使用静态配置)
         self.max_total_exposure = 10000.0  # 最大总敞口 (USDT)
         self.max_single_position = 1000.0  # 单笔最大持仓 (USDT)
+        self.max_leverage = 1.0  # 最大杠杆
         self.stop_loss_pct = 0.02  # 止损百分比 (2%)
         self.take_profit_pct = 0.05  # 止盈百分比 (5%)
         self.max_drawdown_pct = 0.10  # 最大回撤 (10%)
         self.daily_loss_limit = 500.0  # 每日最大亏损 (USDT)
+        self.regime_multiplier = 1.0
+        self.current_regime = "RANGE"
         
         # 运行时状态
         self.positions: Dict[str, dict] = {}
@@ -40,7 +43,7 @@ class ExposureManager:
         self.is_trading_halted = False
         self.halt_reason = ""
         
-    def can_open_position(self, symbol: str, size_usdt: float) -> tuple[bool, str]:
+    def can_open_position(self, symbol: str, size_usdt: float, leverage: float = 1.0) -> tuple[bool, str]:
         """
         检查是否允许开仓
         返回: (是否允许, 原因)
@@ -54,13 +57,19 @@ class ExposureManager:
             self._halt_trading("已达每日最大亏损限制")
             return False, "已达每日最大亏损限制"
         
-        # 检查单笔交易规模
-        if size_usdt > self.max_single_position:
-            return False, f"超出单笔最大持仓 ({size_usdt:.2f} > {self.max_single_position:.2f})"
+        # 检查杠杆限制
+        if leverage > self.max_leverage:
+            return False, f"超出最大杠杆限制 ({leverage:.2f}x > {self.max_leverage:.2f}x)"
+        
+        # 检查单笔交易规模（状态系数）
+        max_single = self.max_single_position * self.regime_multiplier
+        if size_usdt > max_single:
+            return False, f"超出单笔最大持仓 ({size_usdt:.2f} > {max_single:.2f})"
         
         # 检查总敞口
-        if self.total_exposure + size_usdt > self.max_total_exposure:
-            return False, f"超出总敞口限制 ({self.total_exposure + size_usdt:.2f} > {self.max_total_exposure:.2f})"
+        max_total = self.max_total_exposure * self.regime_multiplier
+        if self.total_exposure + size_usdt > max_total:
+            return False, f"超出总敞口限制 ({self.total_exposure + size_usdt:.2f} > {max_total:.2f})"
         
         return True, "允许交易"
     
@@ -178,6 +187,8 @@ class ExposureManager:
             self.max_total_exposure = config['max_total_exposure']
         if 'max_single_position' in config:
             self.max_single_position = config['max_single_position']
+        if 'max_leverage' in config:
+            self.max_leverage = config['max_leverage']
         if 'stop_loss_pct' in config:
             self.stop_loss_pct = config['stop_loss_pct']
         if 'take_profit_pct' in config:
@@ -194,6 +205,8 @@ class ExposureManager:
         return {
             'total_exposure': self.total_exposure,
             'max_total_exposure': self.max_total_exposure,
+            'max_leverage': self.max_leverage,
+            'regime': self.current_regime,
             'position_count': len(self.positions),
             'daily_pnl': self.daily_pnl,
             'current_balance': self.current_balance,
@@ -201,3 +214,7 @@ class ExposureManager:
             'is_halted': self.is_trading_halted,
             'halt_reason': self.halt_reason,
         }
+
+    def apply_regime_overlay(self, regime: str, exposure_multiplier: float = 1.0):
+        self.current_regime = regime
+        self.regime_multiplier = max(0.1, min(1.0, float(exposure_multiplier)))

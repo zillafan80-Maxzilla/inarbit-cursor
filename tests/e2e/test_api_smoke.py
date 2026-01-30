@@ -103,3 +103,40 @@ async def test_login_and_oms_access():
             assert preview.status_code == 200
     except httpx.ConnectError:
         pytest.skip("API 未启动")
+
+
+@pytest.mark.asyncio
+async def test_system_metrics_market_regime():
+    """系统指标包含市场状态"""
+    username = os.getenv("INARBIT_E2E_USER")
+    password = os.getenv("INARBIT_E2E_PASS")
+    if not username or not password:
+        pytest.skip("未提供 E2E 登录账号")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{_api_base()}/api/v1/auth/login",
+                json={"username": username, "password": password},
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                pytest.skip(f"登录失败: status={resp.status_code}")
+            data = resp.json()
+            token = data.get("token") or data.get("access_token")
+            if not token:
+                pytest.skip("登录未返回 token")
+
+            headers = {"Authorization": f"Bearer {token}"}
+            metrics = await client.get(
+                f"{_api_base()}/api/v1/system/metrics",
+                headers=headers,
+                timeout=5.0,
+            )
+            if metrics.status_code == 403:
+                pytest.skip("当前账号无管理员权限")
+            assert metrics.status_code == 200
+            payload = metrics.json().get("data") or {}
+            assert "market_regime" in payload
+    except httpx.ConnectError:
+        pytest.skip("API 未启动")
