@@ -191,6 +191,8 @@ class MaxDrawdownCircuitBreaker:
 
     async def check(self) -> bool:
         current = await self._fetch_equity()
+        if self.peak_equity <= 0 or current > self.peak_equity:
+            self.peak_equity = current
         if self.peak_equity <= 0:
             return True
         drawdown = (self.peak_equity - current) / self.peak_equity
