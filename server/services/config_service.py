@@ -259,6 +259,80 @@ class ConfigService:
         if normalized not in allowed:
             raise ValueError(f"unsupported strategy_type: {strategy_type}")
         return normalized
+
+    def _validate_opportunity_config(self, strategy_type: str, config: dict) -> None:
+        if not isinstance(config, dict):
+            raise ValueError("config must be an object")
+
+        if strategy_type == "graph":
+            min_profit_rate = config.get("min_profit_rate")
+            if min_profit_rate is not None:
+                try:
+                    if float(min_profit_rate) < 0:
+                        raise ValueError("min_profit_rate must be >= 0")
+                except Exception:
+                    raise ValueError("min_profit_rate must be a number")
+            max_path_length = config.get("max_path_length")
+            if max_path_length is not None:
+                try:
+                    if int(max_path_length) < 2:
+                        raise ValueError("max_path_length must be >= 2")
+                except Exception:
+                    raise ValueError("max_path_length must be an integer")
+
+        if strategy_type == "grid":
+            grids = config.get("grids")
+            if grids is not None:
+                if not isinstance(grids, list):
+                    raise ValueError("grids must be a list")
+                for idx, grid in enumerate(grids):
+                    if not isinstance(grid, dict):
+                        raise ValueError(f"grids[{idx}] must be an object")
+                    symbol = grid.get("symbol")
+                    if symbol is not None and not isinstance(symbol, str):
+                        raise ValueError(f"grids[{idx}].symbol must be a string")
+                    try:
+                        upper = grid.get("upper_price")
+                        lower = grid.get("lower_price")
+                        if upper is not None and lower is not None:
+                            if float(upper) <= float(lower):
+                                raise ValueError(f"grids[{idx}] upper_price must be > lower_price")
+                    except Exception:
+                        raise ValueError(f"grids[{idx}] price values must be numbers")
+                    grid_count = grid.get("grid_count")
+                    if grid_count is not None:
+                        try:
+                            if int(grid_count) <= 0:
+                                raise ValueError(f"grids[{idx}].grid_count must be > 0")
+                        except Exception:
+                            raise ValueError(f"grids[{idx}].grid_count must be an integer")
+
+        if strategy_type == "pair":
+            pair_a = config.get("pair_a")
+            pair_b = config.get("pair_b")
+            if pair_a is not None and not isinstance(pair_a, str):
+                raise ValueError("pair_a must be a string")
+            if pair_b is not None and not isinstance(pair_b, str):
+                raise ValueError("pair_b must be a string")
+            entry_z = config.get("entry_z_score")
+            exit_z = config.get("exit_z_score")
+            if entry_z is not None:
+                try:
+                    float(entry_z)
+                except Exception:
+                    raise ValueError("entry_z_score must be a number")
+            if exit_z is not None:
+                try:
+                    float(exit_z)
+                except Exception:
+                    raise ValueError("exit_z_score must be a number")
+            lookback = config.get("lookback_period")
+            if lookback is not None:
+                try:
+                    if int(lookback) <= 0:
+                        raise ValueError("lookback_period must be > 0")
+                except Exception:
+                    raise ValueError("lookback_period must be an integer")
     
     # ============================================
     # 交易所配置接口
@@ -439,6 +513,7 @@ class ConfigService:
 
     async def update_opportunity_config(self, strategy_type: str, config: dict, user_id: UUID) -> OpportunityConfig:
         normalized = self._validate_strategy_type(strategy_type)
+        self._validate_opportunity_config(normalized, config or {})
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(

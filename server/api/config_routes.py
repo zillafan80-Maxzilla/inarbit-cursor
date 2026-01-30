@@ -3,6 +3,7 @@
 提供统一的配置数据接口，确保前端各模块获取一致的配置信息
 """
 from fastapi import APIRouter, HTTPException, Depends
+import os
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -205,6 +206,8 @@ async def get_global_settings(user: CurrentUser = Depends(get_current_user)):
     """获取全局设置"""
     try:
         pool = await get_pg_pool()
+        live_enabled = os.getenv("INARBIT_ENABLE_LIVE_OMS", "0").strip() in {"1", "true", "True"}
+        can_toggle_live = user.role == "admin"
         async with pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT 
@@ -230,7 +233,10 @@ async def get_global_settings(user: CurrentUser = Depends(get_current_user)):
                         "tradingMode": "paper",
                         "botStatus": "stopped",
                         "defaultStrategy": "triangular",
-                        "riskLevel": "medium"
+                        "riskLevel": "medium",
+                        "liveEnabled": live_enabled,
+                        "canToggleLive": can_toggle_live,
+                        "liveBlockedReason": None if live_enabled else "live_oms_disabled",
                     }
                 }
             
@@ -248,7 +254,10 @@ async def get_global_settings(user: CurrentUser = Depends(get_current_user)):
                         "initialCapital": float(row['initial_capital']) if row['initial_capital'] else 1000,
                         "currentBalance": float(row['current_balance']) if row['current_balance'] else 1000,
                         "realizedPnL": float(row['realized_pnl']) if row['realized_pnl'] else 0
-                    }
+                    },
+                    "liveEnabled": live_enabled,
+                    "canToggleLive": can_toggle_live,
+                    "liveBlockedReason": None if live_enabled else "live_oms_disabled",
                 }
             }
     except Exception as e:

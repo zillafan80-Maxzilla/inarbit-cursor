@@ -12,7 +12,10 @@ const Settings = () => {
         riskLevel: 'medium',
         maxDailyLoss: 500,
         maxPositionSize: 10000,
-        enableNotifications: true
+        enableNotifications: true,
+        liveEnabled: false,
+        canToggleLive: false,
+        liveBlockedReason: null,
     });
 
     const [loading, setLoading] = useState(true);
@@ -34,6 +37,9 @@ const Settings = () => {
                     maxDailyLoss: data.maxDailyLoss ?? prev.maxDailyLoss,
                     maxPositionSize: data.maxPositionSize ?? prev.maxPositionSize,
                     enableNotifications: data.enableNotifications ?? prev.enableNotifications,
+                    liveEnabled: data.liveEnabled ?? prev.liveEnabled,
+                    canToggleLive: data.canToggleLive ?? prev.canToggleLive,
+                    liveBlockedReason: data.liveBlockedReason ?? prev.liveBlockedReason,
                 }));
             } catch (e) {
                 console.error(e);
@@ -47,6 +53,14 @@ const Settings = () => {
 
     const handleSave = async () => {
         try {
+            if (config.tradingMode === 'live' && !config.liveEnabled) {
+                alert('实盘已被系统禁用，请先开启 INARBIT_ENABLE_LIVE_OMS');
+                return;
+            }
+            if (config.tradingMode === 'live' && !config.canToggleLive) {
+                alert('仅管理员可切换实盘模式');
+                return;
+            }
             await configAPI.updateGlobalSettings({
                 tradingMode: config.tradingMode,
                 defaultStrategy: config.defaultStrategy,
@@ -116,8 +130,20 @@ const Settings = () => {
                                 style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
                             >
                                 <option value="paper">📝 模拟盘</option>
-                                <option value="live">💰 实盘</option>
+                                <option value="live" disabled={!config.liveEnabled || !config.canToggleLive}>
+                                    💰 实盘
+                                </option>
                             </select>
+                            {!config.liveEnabled && (
+                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                                    实盘已禁用（INARBIT_ENABLE_LIVE_OMS=0）
+                                </div>
+                            )}
+                            {config.liveEnabled && !config.canToggleLive && (
+                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                                    仅管理员可切换实盘模式
+                                </div>
+                            )}
                         </div>
                         <div>
                             <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>默认策略</label>
