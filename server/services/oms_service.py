@@ -135,6 +135,8 @@ class OmsService:
 
         if trading_mode == "live" and os.getenv("INARBIT_ENABLE_LIVE_OMS", "0").strip() not in {"1", "true", "True"}:
             raise PermissionError("live mode requires INARBIT_ENABLE_LIVE_OMS=1")
+        if trading_mode == "live" and not idempotency_key:
+            raise PermissionError("live mode requires idempotency_key")
 
         redis = await get_redis()
         if idempotency_key:
@@ -154,7 +156,29 @@ class OmsService:
                 raise PermissionError("risk check failed")
 
         plan_kind = "basis" if strategy_type == "cashcarry" else ("triangle" if strategy_type == "triangular" else "unknown")
-        plan_id = await self._create_execution_plan(user_id=user_id, trading_mode=trading_mode, kind=plan_kind)
+        opportunity_id = await self._create_opportunity_from_decision(
+            user_id=user_id,
+            trading_mode=trading_mode,
+            kind=plan_kind,
+            decision=decision,
+        )
+        plan_id = await self._create_execution_plan(
+            user_id=user_id,
+            trading_mode=trading_mode,
+            kind=plan_kind,
+            opportunity_id=opportunity_id,
+        )
+        if trading_mode == "live":
+            try:
+                await self._audit_live_execution(
+                    user_id=user_id,
+                    plan_id=plan_id,
+                    opportunity_id=opportunity_id,
+                    decision=decision,
+                    idempotency_key=idempotency_key,
+                )
+            except Exception:
+                pass
 
         try:
             if strategy_type == "cashcarry":
@@ -163,7 +187,15 @@ class OmsService:
                 result = await self._execute_triangular(user_id=user_id, decision=decision, trading_mode=trading_mode, plan_id=plan_id)
             else:
                 raise ValueError("unsupported strategy_type")
-            await self._set_execution_plan_legs(plan_id=plan_id, trading_mode=trading_mode, legs=result.orders)
+            legs_payload = list(result.orders or [])
+            legs_payload.append(
+                {
+                    "kind": "opportunity_snapshot",
+                    "opportunity_id": str(opportunity_id) if opportunity_id else None,
+                    "decision": self._compact_decision(decision),
+                }
+            )
+            await self._set_execution_plan_legs(plan_id=plan_id, trading_mode=trading_mode, legs=legs_payload)
 
             post_poll_enabled = os.getenv("OMS_POST_EXEC_POLL_ENABLED", "0").strip() in {"1", "true", "True"}
             post_poll_max_rounds = 0
@@ -1501,6 +1533,98 @@ class OmsService:
             "symbols": sorted(list(symbols)) if symbols else ([] if symbol else []),
         }
 
+    def _compact_decision(self, decision: dict) -> dict:
+        if not isinstance(decision, dict):
+            return {}
+        return {
+            "strategyType": decision.get("strategyType") or decision.get("strategy_type"),
+            "exchange": decision.get("exchange") or decision.get("exchange_id"),
+            "symbol": decision.get("symbol"),
+            "direction": decision.get("direction"),
+            "expectedProfitRate": decision.get("expectedProfitRate") or decision.get("expected_profit_rate"),
+            "estimatedExposure": decision.get("estimatedExposure") or decision.get("estimated_exposure"),
+            "riskScore": decision.get("riskScore") or decision.get("risk_score"),
+            "confidence": decision.get("confidence"),
+            "timestamp": decision.get("timestamp") or decision.get("timestamp_ms"),
+        }
+
+    async def _create_opportunity_from_decision(
+        self,
+        *,
+        user_id: UUID,
+        trading_mode: str,
+        kind: str,
+        decision: dict,
+    ) -> Optional[UUID]:
+        if kind not in {"triangle", "basis", "funding"}:
+            raise ValueError("unsupported opportunity kind")
+
+        raw = decision.get("rawOpportunity") or decision.get("raw_opportunity") or {}
+        expected_profit_rate = Decimal(str(decision.get("expectedProfitRate") or decision.get("expected_profit_rate") or "0"))
+        estimated_exposure = Decimal(str(decision.get("estimatedExposure") or decision.get("estimated_exposure") or "0"))
+        risk_score = Decimal(str(decision.get("riskScore") or decision.get("risk_score") or "0"))
+        confidence = Decimal(str(decision.get("confidence") or "0"))
+
+        ttl_ms = raw.get("ttl_ms") or raw.get("ttlMs") or raw.get("ttl") or 1000
+        try:
+            ttl_ms = int(ttl_ms)
+        except Exception:
+            ttl_ms = 1000
+
+        expected_pnl = None
+        try:
+            expected_pnl = expected_profit_rate * estimated_exposure
+        except Exception:
+            expected_pnl = None
+
+        legs = raw.get("legs")
+        if not isinstance(legs, list):
+            legs = []
+
+        risks = {
+            "risk_score": str(risk_score),
+            "confidence": str(confidence),
+            "expected_profit_rate": str(expected_profit_rate),
+            "estimated_exposure": str(estimated_exposure),
+            "raw": raw,
+        }
+
+        decision_reason = raw.get("decision_reason") or raw.get("decisionReason")
+
+        table_name = "paper_opportunities" if trading_mode == "paper" else "live_opportunities"
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            opp_id = await conn.fetchval(
+                f"""
+                INSERT INTO {table_name} (
+                    user_id,
+                    exchange_id,
+                    kind,
+                    expected_pnl,
+                    capacity,
+                    ttl_ms,
+                    score,
+                    legs,
+                    risks,
+                    status,
+                    decision_reason
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, 'accepted', $10)
+                RETURNING id
+                """,
+                user_id,
+                decision.get("exchange") or decision.get("exchange_id") or self.exchange_id,
+                kind,
+                expected_pnl,
+                estimated_exposure,
+                ttl_ms,
+                risk_score,
+                json.dumps(legs, ensure_ascii=False, default=str),
+                json.dumps(risks, ensure_ascii=False, default=str),
+                decision_reason,
+            )
+        return opp_id
+
     async def _execute_cashcarry(self, *, user_id: UUID, decision: dict, trading_mode: str, plan_id: UUID) -> OmsExecutionResult:
         symbol = decision.get("symbol")
         direction = decision.get("direction")
@@ -1911,17 +2035,25 @@ class OmsService:
             return "sell", "buy"
         raise ValueError("invalid cashcarry direction")
 
-    async def _create_execution_plan(self, *, user_id: UUID, trading_mode: str, kind: str) -> UUID:
+    async def _create_execution_plan(
+        self,
+        *,
+        user_id: UUID,
+        trading_mode: str,
+        kind: str,
+        opportunity_id: Optional[UUID] = None,
+    ) -> UUID:
         table_name = 'paper_execution_plans' if trading_mode == 'paper' else 'live_execution_plans'
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
             plan_id = await conn.fetchval(
                 f"""
-                INSERT INTO {table_name} (user_id, exchange_id, kind, status, legs, started_at)
-                VALUES ($1, $2, $3, 'running', '[]'::jsonb, NOW())
+                INSERT INTO {table_name} (user_id, opportunity_id, exchange_id, kind, status, legs, started_at)
+                VALUES ($1, $2, $3, $4, 'running', '[]'::jsonb, NOW())
                 RETURNING id
                 """,
                 user_id,
+                opportunity_id,
                 self.exchange_id,
                 kind,
             )
@@ -1943,6 +2075,152 @@ class OmsService:
                 status,
                 error_message,
             )
+
+        if status in {"completed", "failed", "cancelled"}:
+            try:
+                opportunity_id = await self._get_execution_plan_opportunity_id(
+                    plan_id=plan_id,
+                    trading_mode=trading_mode,
+                )
+                if opportunity_id:
+                    opp_status = "executed" if status == "completed" else "rejected"
+                    await self._update_opportunity_status(
+                        opportunity_id=opportunity_id,
+                        trading_mode=trading_mode,
+                        status=opp_status,
+                        decision_reason=error_message,
+                    )
+            except Exception:
+                pass
+
+    async def _get_execution_plan_opportunity_id(
+        self,
+        *,
+        plan_id: UUID,
+        trading_mode: str,
+    ) -> Optional[UUID]:
+        table_name = 'paper_execution_plans' if trading_mode == 'paper' else 'live_execution_plans'
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                f"""
+                SELECT opportunity_id
+                FROM {table_name}
+                WHERE id = $1
+                """,
+                plan_id,
+            )
+
+    async def _update_opportunity_status(
+        self,
+        *,
+        opportunity_id: UUID,
+        trading_mode: str,
+        status: str,
+        decision_reason: Optional[str] = None,
+    ) -> None:
+        table_name = "paper_opportunities" if trading_mode == "paper" else "live_opportunities"
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                UPDATE {table_name}
+                SET status = $2::varchar,
+                    decision_reason = COALESCE($3, decision_reason)
+                WHERE id = $1
+                """,
+                opportunity_id,
+                status,
+                decision_reason,
+            )
+
+    async def _audit_live_execution(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+        opportunity_id: Optional[UUID],
+        decision: dict,
+        idempotency_key: Optional[str],
+    ) -> None:
+        redis = await get_redis()
+        payload = {
+            "user_id": str(user_id),
+            "plan_id": str(plan_id),
+            "opportunity_id": str(opportunity_id) if opportunity_id else None,
+            "idempotency_key": idempotency_key,
+            "decision": self._compact_decision(decision),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        key = "audit:oms:live"
+        await redis.rpush(key, json.dumps(payload, ensure_ascii=False))
+        await redis.ltrim(key, -500, -1)
+
+    async def get_opportunity(
+        self,
+        *,
+        user_id: UUID,
+        opportunity_id: UUID,
+        trading_mode: str = "paper",
+    ) -> Optional[dict[str, Any]]:
+        table_name = "paper_opportunities" if trading_mode == "paper" else "live_opportunities"
+        pool = await get_pg_pool()
+        row = await pool.fetchrow(
+            f"""
+            SELECT *
+            FROM {table_name}
+            WHERE id = $1 AND user_id = $2
+            """,
+            opportunity_id,
+            user_id,
+        )
+        if not row:
+            return None
+        data = dict(row)
+        for key in ("legs", "risks"):
+            value = data.get(key)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    value = [] if key == "legs" else {}
+            data[key] = value
+        return data
+
+    async def get_opportunities(
+        self,
+        *,
+        user_id: UUID,
+        trading_mode: str = "paper",
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        table_name = "paper_opportunities" if trading_mode == "paper" else "live_opportunities"
+        pool = await get_pg_pool()
+        where = ["user_id = $1"]
+        params: list[Any] = [user_id]
+        idx = 2
+        if status:
+            where.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+        if kind:
+            where.append(f"kind = ${idx}")
+            params.append(kind)
+            idx += 1
+        clause = f"WHERE {' AND '.join(where)}"
+        rows = await pool.fetch(
+            f"""
+            SELECT *
+            FROM {table_name}
+            {clause}
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            """,
+            *params,
+        )
+        return [dict(r) for r in rows]
 
     async def _set_execution_plan_legs(self, *, plan_id: UUID, trading_mode: str, legs: list[dict[str, Any]]) -> None:
         table_name = 'paper_execution_plans' if trading_mode == 'paper' else 'live_execution_plans'

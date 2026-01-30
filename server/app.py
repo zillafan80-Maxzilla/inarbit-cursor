@@ -204,7 +204,7 @@ from .api.market_routes import router as market_router
 
 
 # 注册路由 - 统一管理
-logger.info("📡 注册API路由...")
+logger.info("Registering API routes...")
 
 app.include_router(api_router, prefix="/api/v1", tags=["V1 - Core API"])
 app.include_router(risk_router, prefix="/api/v1/risk", tags=["V1 - Risk Management"])

@@ -35,6 +35,19 @@ async fn main() -> Result<()> {
     info!("配置加载完成");
     info!("模式: {}", config.mode);
 
+    let mode = config.mode.to_lowercase();
+    if mode == "live" {
+        let execute_signals = std::env::var("ENGINE_EXECUTE_SIGNALS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "True"))
+            .unwrap_or(false);
+        let live_confirm = std::env::var("ENGINE_LIVE_CONFIRM").unwrap_or_default();
+        if !execute_signals || live_confirm != "CONFIRM_LIVE" {
+            return Err(anyhow::anyhow!(
+                "live mode blocked: require ENGINE_EXECUTE_SIGNALS=1 and ENGINE_LIVE_CONFIRM=CONFIRM_LIVE"
+            ));
+        }
+    }
+
     // 初始化数据库连接
     let db_pool = db::create_pool(&config.database).await?;
     let redis_client = db::create_redis_client(&config.redis)?;
@@ -54,7 +67,7 @@ async fn main() -> Result<()> {
 
     // 初始化执行引擎
     let mut executor = executor::OrderExecutor::new(exchanges.clone());
-    executor.set_simulation_mode(config.mode.to_lowercase() != "live");
+    executor.set_simulation_mode(mode != "live");
 
     // 启动主循环
     info!("引擎启动完成，开始运行...");

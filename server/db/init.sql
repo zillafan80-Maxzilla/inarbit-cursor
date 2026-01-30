@@ -193,12 +193,47 @@ CREATE INDEX idx_strategy_configs_user ON strategy_configs(user_id);
 CREATE INDEX idx_strategy_configs_enabled ON strategy_configs(is_enabled) WHERE is_enabled = true;
 CREATE INDEX idx_strategy_configs_type ON strategy_configs(strategy_type);
 
+-- ============================================
+-- 机会配置（Graph/Grid/Pair 等）
+-- ============================================
+CREATE TABLE opportunity_configs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    strategy_type strategy_type NOT NULL,
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    version INT NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (user_id, strategy_type)
+);
+
+CREATE INDEX idx_opportunity_configs_user ON opportunity_configs(user_id);
+CREATE INDEX idx_opportunity_configs_strategy ON opportunity_configs(strategy_type);
+CREATE INDEX idx_opportunity_configs_active ON opportunity_configs(is_active) WHERE is_active = true;
+
 -- 策略-交易所关联 (多对多)
 CREATE TABLE strategy_exchanges (
     strategy_id UUID REFERENCES strategy_configs(id) ON DELETE CASCADE,
     exchange_config_id UUID REFERENCES exchange_configs(id) ON DELETE CASCADE,
     PRIMARY KEY (strategy_id, exchange_config_id)
 );
+
+-- 默认机会配置（管理员）
+INSERT INTO opportunity_configs (user_id, strategy_type, config)
+SELECT id, 'graph', '{"min_profit_rate": 0.002, "max_path_length": 5}'::jsonb
+FROM users WHERE username = 'admin'
+ON CONFLICT (user_id, strategy_type) DO NOTHING;
+
+INSERT INTO opportunity_configs (user_id, strategy_type, config)
+SELECT id, 'grid', '{"grids": []}'::jsonb
+FROM users WHERE username = 'admin'
+ON CONFLICT (user_id, strategy_type) DO NOTHING;
+
+INSERT INTO opportunity_configs (user_id, strategy_type, config)
+SELECT id, 'pair', '{"pairs": []}'::jsonb
+FROM users WHERE username = 'admin'
+ON CONFLICT (user_id, strategy_type) DO NOTHING;
 
 -- ============================================
 -- 默认策略配置模板

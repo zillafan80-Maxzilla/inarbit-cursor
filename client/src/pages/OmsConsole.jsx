@@ -60,6 +60,7 @@ function defaultConfig() {
     return {
         trading_mode: 'paper',
         confirm_live: false,
+        idempotency_key: '',
         limit: 20,
         max_rounds: 5,
         sleep_ms: 500,
@@ -164,6 +165,9 @@ const OmsConsole = () => {
     const [planDetail, setPlanDetail] = useState(null);
     const [planDetailLoading, setPlanDetailLoading] = useState(false);
     const [planDetailError, setPlanDetailError] = useState('');
+    const [opportunityDetail, setOpportunityDetail] = useState(null);
+    const [opportunityLoading, setOpportunityLoading] = useState(false);
+    const [opportunityError, setOpportunityError] = useState('');
     const [planPnL, setPlanPnL] = useState([]);
     const [planPnLLoading, setPlanPnLLoading] = useState(false);
     const [planPnLError, setPlanPnLError] = useState('');
@@ -631,6 +635,25 @@ const OmsConsole = () => {
         }
     };
 
+    const refreshOpportunityDetail = useCallback(
+        async (opportunityId) => {
+            const oid = String(opportunityId || '').trim();
+            if (!oid) return;
+            setOpportunityLoading(true);
+            setOpportunityError('');
+            try {
+                const resp = await omsAPI.getOpportunity(oid, { trading_mode: cfg.trading_mode });
+                setOpportunityDetail(resp?.opportunity || null);
+            } catch (e) {
+                setOpportunityDetail(null);
+                setOpportunityError(String(e?.message || e));
+            } finally {
+                setOpportunityLoading(false);
+            }
+        },
+        [cfg.trading_mode]
+    );
+
     const refreshPlanDetail = useCallback(
         async (targetPlanId) => {
             const pid = String(targetPlanId || '').trim();
@@ -642,6 +665,12 @@ const OmsConsole = () => {
                 const resp = await omsAPI.getPlan(pid, { trading_mode: cfg.trading_mode });
                 const plan = resp?.plan || null;
                 setPlanDetail(plan);
+                if (plan?.opportunity_id) {
+                    await refreshOpportunityDetail(plan.opportunity_id);
+                } else {
+                    setOpportunityDetail(null);
+                    setOpportunityError('');
+                }
             } catch (e) {
                 setPlanDetail(null);
                 setPlanDetailError(String(e?.message || e));
@@ -649,7 +678,7 @@ const OmsConsole = () => {
                 setPlanDetailLoading(false);
             }
         },
-        [cfg.trading_mode]
+        [cfg.trading_mode, refreshOpportunityDetail]
     );
 
     const refreshPlanPnL = useCallback(
@@ -686,6 +715,8 @@ const OmsConsole = () => {
             setPlanDetailError('');
             setPlanPnL([]);
             setPlanPnLError('');
+            setOpportunityDetail(null);
+            setOpportunityError('');
             return;
         }
         refreshPlanDetail(pid);
@@ -719,7 +750,7 @@ const OmsConsole = () => {
             const resp = await omsAPI.executeLatest({
                 trading_mode: cfg.trading_mode,
                 confirm_live: !!cfg.confirm_live,
-                idempotency_key: null,
+                idempotency_key: cfg.idempotency_key || null,
                 limit: 1,
             });
             write(resp);
@@ -935,6 +966,15 @@ const OmsConsole = () => {
                                     <input type="checkbox" checked={!!cfg.confirm_live} onChange={(e) => setCfg({ ...cfg, confirm_live: e.target.checked })} />
                                     实盘确认
                                 </label>
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>幂等键（实盘必填）</label>
+                                <input
+                                    value={cfg.idempotency_key ?? ''}
+                                    onChange={(e) => setCfg({ ...cfg, idempotency_key: e.target.value })}
+                                    placeholder="例如: live-2026-01-30-001"
+                                    style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                                />
                             </div>
                             <div>
                                 <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>执行条数</label>
@@ -1602,6 +1642,43 @@ const OmsConsole = () => {
                                 <div>
                                     <div style={{ fontWeight: 700 }}>错误信息</div>
                                     <div style={{ color: planDetail.error_message ? '#dc322f' : 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>{String(planDetail.error_message || '')}</div>
+                                </div>
+
+                                <div style={{ gridColumn: '1 / span 2' }}>
+                                    <div style={{ fontWeight: 700, marginBottom: '6px' }}>关联机会</div>
+                                    {!planDetail.opportunity_id && <div style={{ color: 'var(--text-muted)' }}>暂无关联机会</div>}
+                                    {planDetail.opportunity_id && opportunityLoading && <div style={{ color: 'var(--text-muted)' }}>加载中...</div>}
+                                    {planDetail.opportunity_id && !opportunityLoading && opportunityError && (
+                                        <div style={{ color: '#dc322f', whiteSpace: 'pre-wrap' }}>{opportunityError}</div>
+                                    )}
+                                    {planDetail.opportunity_id && !opportunityLoading && !opportunityError && opportunityDetail && (
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '10px' }}>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>机会编号</div>
+                                                <div>{String(opportunityDetail.id)}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>机会状态</div>
+                                                <div>{String(opportunityDetail.status || '-')}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>类型</div>
+                                                <div>{String(opportunityDetail.kind || '-')}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>期望收益</div>
+                                                <div>{String(opportunityDetail.expected_pnl ?? '-')}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>容量</div>
+                                                <div>{String(opportunityDetail.capacity ?? '-')}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ color: 'var(--text-muted)' }}>评分</div>
+                                                <div>{String(opportunityDetail.score ?? '-')}</div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div style={{ gridColumn: '1 / span 2' }}>

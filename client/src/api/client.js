@@ -218,6 +218,14 @@ export const configAPI = {
     // 获取所有基础货币
     getCurrencies: () => fetchAPI('/config/currencies'),
 
+    // 机会配置（Graph/Grid/Pair）
+    getOpportunityConfigs: () => fetchAPI('/config/opportunity'),
+    getOpportunityConfig: (strategyType) => fetchAPI(`/config/opportunity/${strategyType}`),
+    updateOpportunityConfig: (strategyType, payload) => fetchAPI(`/config/opportunity/${strategyType}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+    }),
+
     // 获取全局设置
     getGlobalSettings: () => fetchAPI('/config/global'),
 
@@ -315,6 +323,16 @@ export const omsAPI = {
     getPlan: (planId, params = {}) => {
         const query = new URLSearchParams(params).toString();
         return fetchAPI(`/oms/plans/${planId}${query ? '?' + query : ''}`);
+    },
+
+    getOpportunities: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/oms/opportunities${query ? '?' + query : ''}`);
+    },
+
+    getOpportunity: (opportunityId, params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/oms/opportunities/${opportunityId}${query ? '?' + query : ''}`);
     },
 
     reconcilePlan: (planId, payload) => fetchAPI(`/oms/plans/${planId}/reconcile`, {

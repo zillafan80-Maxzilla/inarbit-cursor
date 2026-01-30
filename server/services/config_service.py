@@ -3,6 +3,7 @@
 提供交易所、币种、全局设置的统一访问接口
 确保所有模块使用相同的数据源，避免配置不一致导致系统崩溃
 """
+import json
 import logging
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -61,6 +62,21 @@ class TradingPair:
             'supportedExchanges': self.supported_exchanges or []
         }
 
+@dataclass
+class OpportunityConfig:
+    """机会配置"""
+    strategy_type: str
+    config: dict
+    version: int
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "strategyType": self.strategy_type,
+            "config": self.config,
+            "version": self.version,
+            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 # ============================================
 # 默认配置（用于初始化）
@@ -105,6 +121,7 @@ class ConfigService:
     def __init__(self):
         self._exchanges_cache: Dict[str, ExchangeConfig] = {}
         self._pairs_cache: Dict[str, TradingPair] = {}
+        self._opportunity_cache: Dict[str, Dict[str, OpportunityConfig]] = {}
         self._cache_time: Optional[datetime] = None
     
     @classmethod
@@ -196,6 +213,50 @@ class ConfigService:
                 self._exchanges_cache[ex.id] = ex
             for pair in DEFAULT_PAIRS:
                 self._pairs_cache[pair.symbol] = pair
+
+    async def _load_opportunity_configs(self, user_id: UUID):
+        """从数据库加载机会配置并同步到 Redis"""
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT strategy_type, config, version, updated_at
+                FROM opportunity_configs
+                WHERE user_id = $1 AND is_active = true
+                """,
+                user_id,
+            )
+
+        configs: Dict[str, OpportunityConfig] = {}
+        for row in rows or []:
+            config_value = row["config"] or {}
+            if isinstance(config_value, str):
+                try:
+                    config_value = json.loads(config_value)
+                except Exception:
+                    config_value = {}
+            configs[str(row["strategy_type"])] = OpportunityConfig(
+                strategy_type=str(row["strategy_type"]),
+                config=config_value,
+                version=int(row["version"] or 1),
+                updated_at=row.get("updated_at"),
+            )
+
+        self._opportunity_cache[str(user_id)] = configs
+        await self._sync_opportunity_configs_to_redis(user_id, configs)
+
+    async def _sync_opportunity_configs_to_redis(self, user_id: UUID, configs: Dict[str, OpportunityConfig]):
+        redis = await get_redis()
+        for strategy_type, cfg in configs.items():
+            key = f"config:opportunity:{user_id}:{strategy_type}"
+            await redis.set(key, json.dumps(cfg.to_dict(), ensure_ascii=False))
+
+    def _validate_strategy_type(self, strategy_type: str) -> str:
+        allowed = {"graph", "grid", "pair"}
+        normalized = (strategy_type or "").strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"unsupported strategy_type: {strategy_type}")
+        return normalized
     
     # ============================================
     # 交易所配置接口
@@ -351,6 +412,73 @@ class ConfigService:
         """获取所有基础货币列表"""
         all_pairs = await self.get_all_pairs()
         return list(set(p.base for p in all_pairs))
+
+    # ============================================
+    # 机会配置接口
+    # ============================================
+
+    async def get_opportunity_config(self, strategy_type: str, user_id: UUID) -> OpportunityConfig:
+        normalized = self._validate_strategy_type(strategy_type)
+        cache = self._opportunity_cache.get(str(user_id)) or {}
+        if normalized not in cache:
+            await self._load_opportunity_configs(user_id)
+            cache = self._opportunity_cache.get(str(user_id)) or {}
+
+        if normalized in cache:
+            return cache[normalized]
+
+        return OpportunityConfig(strategy_type=normalized, config={}, version=1, updated_at=None)
+
+    async def get_all_opportunity_configs(self, user_id: UUID) -> List[OpportunityConfig]:
+        cache = self._opportunity_cache.get(str(user_id)) or {}
+        if not cache:
+            await self._load_opportunity_configs(user_id)
+            cache = self._opportunity_cache.get(str(user_id)) or {}
+        return list(cache.values())
+
+    async def update_opportunity_config(self, strategy_type: str, config: dict, user_id: UUID) -> OpportunityConfig:
+        normalized = self._validate_strategy_type(strategy_type)
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO opportunity_configs (user_id, strategy_type, config, version, is_active, updated_at)
+                VALUES ($1, $2::strategy_type, $3::jsonb, 1, true, NOW())
+                ON CONFLICT (user_id, strategy_type) DO UPDATE SET
+                    config = EXCLUDED.config,
+                    version = opportunity_configs.version + 1,
+                    is_active = true,
+                    updated_at = NOW()
+                RETURNING strategy_type, config, version, updated_at
+                """,
+                user_id,
+                normalized,
+                json.dumps(config, ensure_ascii=False),
+            )
+
+        if not row:
+            raise RuntimeError("failed to update opportunity config")
+
+        config_value = row["config"] or {}
+        if isinstance(config_value, str):
+            try:
+                config_value = json.loads(config_value)
+            except Exception:
+                config_value = {}
+
+        updated = OpportunityConfig(
+            strategy_type=str(row["strategy_type"]),
+            config=config_value,
+            version=int(row["version"] or 1),
+            updated_at=row.get("updated_at"),
+        )
+
+        user_key = str(user_id)
+        if user_key not in self._opportunity_cache:
+            self._opportunity_cache[user_key] = {}
+        self._opportunity_cache[user_key][normalized] = updated
+        await self._sync_opportunity_configs_to_redis(user_id, {normalized: updated})
+        return updated
     
     # ============================================
     # 缓存管理
@@ -360,6 +488,7 @@ class ConfigService:
         """刷新缓存"""
         self._exchanges_cache.clear()
         self._pairs_cache.clear()
+        self._opportunity_cache.clear()
         await self._load_from_database()
     
     def is_cache_valid(self) -> bool:

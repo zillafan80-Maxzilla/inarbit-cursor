@@ -100,6 +100,12 @@ impl OrderExecutor {
             return self.simulate_execution(signal).await;
         }
 
+        if !self.live_enabled() {
+            return Err(anyhow::anyhow!(
+                "live execution blocked: require ENGINE_EXECUTE_SIGNALS=1 and ENGINE_LIVE_CONFIRM=CONFIRM_LIVE"
+            ));
+        }
+
         // 真实执行逻辑
         // TODO: 根据信号类型拆分订单并执行
         
@@ -198,7 +204,21 @@ impl OrderExecutor {
             });
         }
 
+        if !self.live_enabled() {
+            return Err(anyhow::anyhow!(
+                "live execution blocked: require ENGINE_EXECUTE_SIGNALS=1 and ENGINE_LIVE_CONFIRM=CONFIRM_LIVE"
+            ));
+        }
+
         Err(anyhow::anyhow!("订单发送未实现"))
+    }
+
+    fn live_enabled(&self) -> bool {
+        let execute_signals = std::env::var("ENGINE_EXECUTE_SIGNALS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "True"))
+            .unwrap_or(false);
+        let live_confirm = std::env::var("ENGINE_LIVE_CONFIRM").unwrap_or_default();
+        execute_signals && live_confirm == "CONFIRM_LIVE"
     }
 
     /// 批量执行订单 (原子性套利)

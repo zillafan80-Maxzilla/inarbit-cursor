@@ -2,9 +2,9 @@
  * 策略配置管理页面
  * 重构版 - 横向列表布局（类似求职网站风格）
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStrategies, usePnLSummary, useSignals } from '../api/hooks';
-import { strategyAPI } from '../api/client';
+import { configAPI, strategyAPI } from '../api/client';
 
 // 策略类型定义
 const STRATEGY_TYPES = {
@@ -45,11 +45,16 @@ const STRATEGY_TYPES = {
     }
 };
 
+const OPPORTUNITY_TYPES = ['graph', 'grid', 'pair'];
+
 const Strategies = () => {
     const { strategies, loading, error, refresh } = useStrategies();
     const { summary } = usePnLSummary();
     const { signals } = useSignals();
     const [updating, setUpdating] = useState(null);
+    const [opportunityConfigs, setOpportunityConfigs] = useState({});
+    const [opportunityLoading, setOpportunityLoading] = useState(false);
+    const [opportunitySaving, setOpportunitySaving] = useState({});
 
     // 切换策略开关
     const toggleStrategy = async (id) => {
@@ -68,6 +73,53 @@ const Strategies = () => {
         const count = signals.filter(s => s.strategy_type === strategyType).length;
         return count;
     };
+
+    const loadOpportunityConfigs = async () => {
+        setOpportunityLoading(true);
+        try {
+            const results = await Promise.all(
+                OPPORTUNITY_TYPES.map((type) => configAPI.getOpportunityConfig(type))
+            );
+            const next = {};
+            results.forEach((res, index) => {
+                const type = OPPORTUNITY_TYPES[index];
+                const cfg = res?.data?.config || {};
+                next[type] = {
+                    raw: JSON.stringify(cfg, null, 2),
+                    version: res?.data?.version || 1,
+                };
+            });
+            setOpportunityConfigs(next);
+        } catch (err) {
+            alert(`加载机会配置失败: ${err.message}`);
+        } finally {
+            setOpportunityLoading(false);
+        }
+    };
+
+    const saveOpportunityConfig = async (type) => {
+        const payload = opportunityConfigs[type]?.raw || '{}';
+        setOpportunitySaving((prev) => ({ ...prev, [type]: true }));
+        try {
+            const parsed = JSON.parse(payload);
+            const res = await configAPI.updateOpportunityConfig(type, { config: parsed });
+            setOpportunityConfigs((prev) => ({
+                ...prev,
+                [type]: {
+                    raw: JSON.stringify(res?.data?.config || {}, null, 2),
+                    version: res?.data?.version || prev[type]?.version || 1,
+                },
+            }));
+        } catch (err) {
+            alert(`保存 ${type} 配置失败: ${err.message}`);
+        } finally {
+            setOpportunitySaving((prev) => ({ ...prev, [type]: false }));
+        }
+    };
+
+    useEffect(() => {
+        loadOpportunityConfigs();
+    }, []);
 
     if (loading) {
         return (
@@ -232,6 +284,76 @@ const Strategies = () => {
                             尚未配置任何策略
                         </div>
                     )}
+                </div>
+            </div>
+
+            {/* 机会配置 */}
+            <div style={{ marginTop: '20px' }}>
+                <div className="page-header" style={{ marginBottom: '12px' }}>
+                    <div>
+                        <h2 className="page-title" style={{ fontSize: '14px' }}>机会配置</h2>
+                        <p className="page-subtitle">管理 Graph/Grid/Pair 机会参数</p>
+                    </div>
+                    <button
+                        onClick={loadOpportunityConfigs}
+                        className="btn btn-secondary btn-sm"
+                        disabled={opportunityLoading}
+                    >
+                        {opportunityLoading ? '加载中...' : '刷新配置'}
+                    </button>
+                </div>
+
+                <div className="data-table-container" style={{ padding: '12px' }}>
+                    {OPPORTUNITY_TYPES.map((type) => {
+                        const typeInfo = STRATEGY_TYPES[type] || {};
+                        const configText = opportunityConfigs[type]?.raw || '{}';
+                        const version = opportunityConfigs[type]?.version || 1;
+                        return (
+                            <div
+                                key={type}
+                                style={{
+                                    border: '1px solid rgba(0,0,0,0.06)',
+                                    borderRadius: '8px',
+                                    padding: '12px',
+                                    marginBottom: '12px',
+                                    background: 'rgba(0,0,0,0.01)',
+                                }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 600 }}>
+                                        {typeInfo.icon} {typeInfo.name || type} <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>v{version}</span>
+                                    </div>
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => saveOpportunityConfig(type)}
+                                        disabled={opportunitySaving[type]}
+                                    >
+                                        {opportunitySaving[type] ? '保存中...' : '保存'}
+                                    </button>
+                                </div>
+                                <textarea
+                                    value={configText}
+                                    onChange={(e) => setOpportunityConfigs((prev) => ({
+                                        ...prev,
+                                        [type]: {
+                                            ...prev[type],
+                                            raw: e.target.value,
+                                        },
+                                    }))}
+                                    style={{
+                                        marginTop: '8px',
+                                        width: '100%',
+                                        minHeight: '120px',
+                                        fontSize: '10px',
+                                        fontFamily: 'monospace',
+                                        borderRadius: '6px',
+                                        border: '1px solid rgba(0,0,0,0.08)',
+                                        padding: '8px',
+                                    }}
+                                />
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 

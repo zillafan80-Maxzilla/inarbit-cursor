@@ -24,7 +24,8 @@ from server.engines.strategies.triangular_strategy import TriangularArbitrageStr
 from dotenv import load_dotenv
 
 # 加载环境变量
-load_dotenv()
+env_path = Path(__file__).parent / "server" / ".env"
+load_dotenv(env_path)
 
 # 配置日志
 logging.basicConfig(
@@ -49,6 +50,9 @@ class SystemInitializer:
         
         self.db = DatabaseManager.get_instance()
         await self.db.initialize()
+
+    def _skip_exchange_steps(self) -> bool:
+        return os.getenv("INARBIT_SKIP_EXCHANGE", "").strip() in {"1", "true", "True"}
     
     async def step1_reset_system(self):
         """步骤1：一键重置系统"""
@@ -56,7 +60,12 @@ class SystemInitializer:
         logger.info("📋 步骤 1/7: 系统重置")
         logger.info("▓" * 60)
         
-        confirm = input("\n⚠️  确认要清空所有数据吗？(输入 'YES' 继续): ")
+        env_confirm = os.getenv("INARBIT_INIT_CONFIRM", "").strip()
+        if env_confirm == "YES":
+            confirm = "YES"
+            logger.info("使用环境变量确认重置: INARBIT_INIT_CONFIRM=YES")
+        else:
+            confirm = input("\nCONFIRM reset all data? (type 'YES' to continue): ")
         if confirm != 'YES':
             logger.warning("❌ 用户取消了重置操作")
             return False
@@ -151,8 +160,12 @@ class SystemInitializer:
         logger.info("📋 步骤 3/7: 添加 Binance 交易所")
         logger.info("▓" * 60)
         
+        if self._skip_exchange_steps():
+            logger.warning("跳过交易所步骤: INARBIT_SKIP_EXCHANGE=1")
+            return True
+
         api_key = os.getenv('BINANCE_API_KEY')
-        api_secret = os.getenv('BINANCE_SECRET_KEY')
+        api_secret = os.getenv('BINANCE_SECRET_KEY') or os.getenv('BINANCE_API_SECRET')
         
         if not api_key or not api_secret:
             logger.error("❌ 未找到 Binance API 密钥，请检查 .env 文件")
@@ -177,6 +190,28 @@ class SystemInitializer:
                     SET is_connected = true, last_heartbeat = NOW()
                     WHERE exchange_id = 'binance'
                 """)
+
+                # 绑定常用交易对到交易所配置（用于 OMS 执行）
+                try:
+                    await conn.execute("""
+                        INSERT INTO exchange_trading_pairs (
+                            exchange_config_id,
+                            trading_pair_id,
+                            is_enabled,
+                            min_order_amount,
+                            maker_fee,
+                            taker_fee
+                        )
+                        SELECT ec.id, tp.id, true, 0.00001, 0.001, 0.001
+                        FROM exchange_configs ec
+                        JOIN trading_pairs tp
+                          ON tp.symbol IN ('BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT')
+                        WHERE ec.exchange_id = 'binance'
+                          AND ec.user_id = (SELECT id FROM users WHERE username = 'admin')
+                        ON CONFLICT (exchange_config_id, trading_pair_id) DO NOTHING
+                    """)
+                except Exception as e:
+                    logger.warning(f"exchange_trading_pairs 绑定失败: {e}")
                 
                 logger.info("✅ Binance 交易所配置已添加")
             
@@ -192,8 +227,12 @@ class SystemInitializer:
         logger.info("📋 步骤 4/7: 测试交易所连接")
         logger.info("▓" * 60)
         
+        if self._skip_exchange_steps():
+            logger.warning("跳过交易所连接测试: INARBIT_SKIP_EXCHANGE=1")
+            return True
+
         api_key = os.getenv('BINANCE_API_KEY')
-        api_secret = os.getenv('BINANCE_SECRET_KEY')
+        api_secret = os.getenv('BINANCE_SECRET_KEY') or os.getenv('BINANCE_API_SECRET')
         
         try:
             # 创建 Binance 连接器
@@ -224,6 +263,14 @@ class SystemInitializer:
         logger.info("📋 步骤 5/7: 提取真实交易数据")
         logger.info("▓" * 60)
         
+        if self._skip_exchange_steps():
+            logger.warning("跳过市场数据拉取: INARBIT_SKIP_EXCHANGE=1")
+            return True
+
+        if self.binance is None:
+            logger.warning("跳过市场数据拉取: Binance 连接未初始化")
+            return True
+
         try:
             # 获取几个主要交易对的实时价格
             symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
@@ -253,6 +300,14 @@ class SystemInitializer:
         logger.info("📋 步骤 6/7: 测试三角套利策略")
         logger.info("▓" * 60)
         
+        if self._skip_exchange_steps():
+            logger.warning("跳过策略测试: INARBIT_SKIP_EXCHANGE=1")
+            return True
+
+        if self.binance is None:
+            logger.warning("跳过策略测试: Binance 连接未初始化")
+            return True
+
         try:
             # 创建策略实例
             config = {

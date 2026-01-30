@@ -27,6 +27,9 @@ class SimulationUpdate(BaseModel):
     resetOnStart: Optional[bool] = None
     resetNow: Optional[bool] = None
 
+class OpportunityConfigUpdate(BaseModel):
+    config: dict
+
 
 # ============================================
 # 交易所配置 API
@@ -148,6 +151,54 @@ async def get_currencies():
 # ============================================
 # 全局设置 API
 # ============================================
+
+@router.get("/opportunity")
+async def list_opportunity_configs(user: CurrentUser = Depends(get_current_user)):
+    """列出机会配置（Graph/Grid/Pair）"""
+    try:
+        service = await get_config_service()
+        configs = await service.get_all_opportunity_configs(user_id=user.id)
+        return {
+            "success": True,
+            "data": [c.to_dict() for c in configs],
+            "count": len(configs),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/opportunity/{strategy_type}")
+async def get_opportunity_config(strategy_type: str, user: CurrentUser = Depends(get_current_user)):
+    """获取指定机会配置"""
+    try:
+        service = await get_config_service()
+        config = await service.get_opportunity_config(strategy_type=strategy_type, user_id=user.id)
+        return {"success": True, "data": config.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/opportunity/{strategy_type}")
+async def update_opportunity_config(
+    strategy_type: str,
+    payload: OpportunityConfigUpdate,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """更新机会配置"""
+    try:
+        service = await get_config_service()
+        updated = await service.update_opportunity_config(
+            strategy_type=strategy_type,
+            config=payload.config or {},
+            user_id=user.id,
+        )
+        return {"success": True, "data": updated.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/global")
 async def get_global_settings(user: CurrentUser = Depends(get_current_user)):

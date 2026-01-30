@@ -269,6 +269,50 @@ async def get_oms_plan(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/opportunities")
+async def list_oms_opportunities(
+    user: CurrentUser = Depends(get_current_user),
+    trading_mode: str = "paper",
+    status: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = 50,
+):
+    oms = OmsService()
+    try:
+        opportunities = await oms.get_opportunities(
+            user_id=user.id,
+            trading_mode=trading_mode,
+            status=status,
+            kind=kind,
+            limit=limit,
+        )
+        return jsonable_encoder({"success": True, "opportunities": opportunities})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/opportunities/{opportunity_id}")
+async def get_oms_opportunity(
+    opportunity_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+    trading_mode: str = "paper",
+):
+    oms = OmsService()
+    try:
+        opp = await oms.get_opportunity(
+            user_id=user.id,
+            opportunity_id=opportunity_id,
+            trading_mode=trading_mode,
+        )
+        if not opp:
+            raise HTTPException(status_code=404, detail="opportunity not found")
+        return jsonable_encoder({"success": True, "opportunity": opp})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/orders")
 async def list_oms_orders(
     user: CurrentUser = Depends(get_current_user),
