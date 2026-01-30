@@ -335,6 +335,16 @@ export const omsAPI = {
         return fetchAPI(`/oms/opportunities/${opportunityId}${query ? '?' + query : ''}`);
     },
 
+    getAlerts: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/oms/alerts${query ? '?' + query : ''}`);
+    },
+
+    getOpportunityStats: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/oms/opportunities/stats${query ? '?' + query : ''}`);
+    },
+
     reconcilePlan: (planId, payload) => fetchAPI(`/oms/plans/${planId}/reconcile`, {
         method: 'POST',
         body: JSON.stringify(payload),

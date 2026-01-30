@@ -173,6 +173,11 @@ const OmsConsole = () => {
     const [planPnLError, setPlanPnLError] = useState('');
     const [planPnLUpdatedAt, setPlanPnLUpdatedAt] = useState('');
     const [planPnLWindow, setPlanPnLWindow] = useState('15m');
+    const [alertList, setAlertList] = useState([]);
+    const [alertLoading, setAlertLoading] = useState(false);
+    const [alertError, setAlertError] = useState('');
+    const [alertLimit, setAlertLimit] = useState(20);
+    const [alertOffset, setAlertOffset] = useState(0);
     const [planMarkerFilter, setPlanMarkerFilter] = useState({
         execution: true,
         reconcile: true,
@@ -708,6 +713,20 @@ const OmsConsole = () => {
         [cfg.trading_mode]
     );
 
+    const fetchAlerts = useCallback(async () => {
+        setAlertLoading(true);
+        setAlertError('');
+        try {
+            const resp = await omsAPI.getAlerts({ limit: alertLimit, offset: alertOffset });
+            setAlertList(resp?.alerts || []);
+            write(resp);
+        } catch (e) {
+            setAlertError(String(e?.message || e));
+        } finally {
+            setAlertLoading(false);
+        }
+    }, [alertLimit, alertOffset]);
+
     useEffect(() => {
         const pid = String(planId || '').trim();
         if (!pid) {
@@ -1230,6 +1249,49 @@ const OmsConsole = () => {
                             )}
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: '12px' }}>
+                <div className="card-header"><span className="card-title">🚨 告警历史</span></div>
+                <div className="card-body" style={{ padding: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>条数</label>
+                            <input
+                                type="number"
+                                value={alertLimit}
+                                onChange={(e) => setAlertLimit(Number(e.target.value))}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>偏移</label>
+                            <input
+                                type="number"
+                                value={alertOffset}
+                                onChange={(e) => setAlertOffset(Number(e.target.value))}
+                                style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                            />
+                        </div>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                            {alertLoading ? '加载中...' : `共 ${alertList.length} 条`}
+                        </div>
+                        <button className="btn btn-secondary btn-sm" onClick={fetchAlerts} disabled={alertLoading}>拉取告警</button>
+                    </div>
+                    {alertError && <div style={{ color: '#dc322f', whiteSpace: 'pre-wrap' }}>{alertError}</div>}
+                    {!alertError && (
+                        <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '10px' }}>
+                            {alertList.length === 0 && <div style={{ color: 'var(--text-muted)' }}>暂无告警记录</div>}
+                            {alertList.map((a, idx) => (
+                                <div key={idx} style={{ padding: '6px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                                    <div style={{ fontWeight: 700 }}>{String(a.level || 'INFO')} · {String(a.category || '-')}</div>
+                                    <div style={{ color: 'var(--text-muted)' }}>{String(a.message || '')}</div>
+                                    <div style={{ color: 'var(--text-muted)' }}>{String(a.created_at || '')}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
 

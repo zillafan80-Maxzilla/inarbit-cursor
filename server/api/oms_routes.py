@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..auth import CurrentUser, get_current_user, get_current_user_from_token
 from ..services.oms_service import OmsService
+from ..db import get_redis
 from ..services.order_service import OrderService, PnLService
 
 router = APIRouter(prefix="/api/v1/oms", tags=["oms"])
@@ -115,6 +116,40 @@ async def preview_reconcile_next_action(
         return jsonable_encoder({"success": True, **result} if isinstance(result, dict) else {"success": True, "result": result})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/alerts")
+async def get_alert_history(
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """获取 OMS 告警历史"""
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be <= 500")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    redis = await get_redis()
+    key = f"audit:alert:{user.id}"
+    end = offset + limit - 1
+    rows = await redis.lrange(key, offset, end)
+    alerts = []
+    for raw in rows or []:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="ignore")
+        if isinstance(raw, str):
+            try:
+                alerts.append(json.loads(raw))
+            except Exception:
+                alerts.append({"message": raw})
+        else:
+            alerts.append({"message": str(raw)})
+
+    total = await redis.llen(key)
+    return {"success": True, "alerts": alerts, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/plans/{plan_id}/reconcile")
