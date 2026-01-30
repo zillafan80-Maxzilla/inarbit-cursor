@@ -21,6 +21,11 @@ const Settings = () => {
     const [loading, setLoading] = useState(true);
 
     const [resetting, setResetting] = useState(false);
+    const [auditList, setAuditList] = useState([]);
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditError, setAuditError] = useState('');
+    const [auditLimit, setAuditLimit] = useState(20);
+    const [auditOffset, setAuditOffset] = useState(0);
 
     useEffect(() => {
         let mounted = true;
@@ -100,6 +105,20 @@ const Settings = () => {
             alert(e.message || '重置失败');
         } finally {
             setResetting(false);
+        }
+    };
+
+    const loadLiveSwitchAudit = async () => {
+        setAuditLoading(true);
+        setAuditError('');
+        try {
+            const resp = await configAPI.getLiveSwitchAudit({ limit: auditLimit, offset: auditOffset });
+            setAuditList(resp?.items || []);
+        } catch (e) {
+            setAuditError(e.message || '加载失败');
+            setAuditList([]);
+        } finally {
+            setAuditLoading(false);
         }
     };
 
@@ -261,6 +280,48 @@ const Settings = () => {
                 </button>
             </div>
         </div>
+
+            <div className="stat-box" style={{ padding: '12px', marginTop: '16px' }}>
+                <h3 style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.05)', paddingBottom: '6px' }}>
+                    实盘开关审计
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>条数</label>
+                        <input
+                            type="number"
+                            value={auditLimit}
+                            onChange={(e) => setAuditLimit(Number(e.target.value))}
+                            style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>偏移</label>
+                        <input
+                            type="number"
+                            value={auditOffset}
+                            onChange={(e) => setAuditOffset(Number(e.target.value))}
+                            style={{ width: '100%', padding: '6px', fontSize: '10px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)' }}
+                        />
+                    </div>
+                    <button className="btn btn-secondary" onClick={loadLiveSwitchAudit} disabled={auditLoading}>
+                        {auditLoading ? '加载中...' : '拉取审计'}
+                    </button>
+                </div>
+                {auditError && <div style={{ color: '#dc322f', whiteSpace: 'pre-wrap', marginBottom: '6px' }}>{auditError}</div>}
+                {!auditError && (
+                    <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '10px' }}>
+                        {auditList.length === 0 && <div style={{ color: 'var(--text-muted)' }}>暂无审计记录</div>}
+                        {auditList.map((item, idx) => (
+                            <div key={idx} style={{ padding: '6px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                                <div style={{ fontWeight: 700 }}>{item.username || item.user_id || '-'}</div>
+                                <div style={{ color: 'var(--text-muted)' }}>{String(item.from || '-') } → {String(item.to || '-')}</div>
+                                <div style={{ color: 'var(--text-muted)' }}>{String(item.changed_at || '')}</div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
     );
 };
 

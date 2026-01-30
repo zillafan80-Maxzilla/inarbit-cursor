@@ -3,13 +3,15 @@
 提供统一的配置数据接口，确保前端各模块获取一致的配置信息
 """
 from fastapi import APIRouter, HTTPException, Depends
+import json
 import os
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 
 from ..services.config_service import get_config_service
 from ..db import get_pg_pool, get_redis
-from ..auth import CurrentUser, get_current_user
+from ..auth import CurrentUser, get_current_user, require_admin
 
 router = APIRouter()
 
@@ -285,7 +287,13 @@ async def update_global_settings(
 ):
     try:
         pool = await get_pg_pool()
-        await pool.execute(
+        prev_mode = None
+        async with pool.acquire() as conn:
+            prev_mode = await conn.fetchval(
+                "SELECT trading_mode FROM global_settings WHERE user_id = $1",
+                user.id,
+            )
+            await conn.execute(
             """
             INSERT INTO global_settings (
                 user_id,
@@ -314,11 +322,65 @@ async def update_global_settings(
             payload.maxDailyLoss,
             payload.maxPositionSize,
             payload.enableNotifications,
-        )
+            )
+
+        if payload.tradingMode and payload.tradingMode != prev_mode:
+            try:
+                redis = await get_redis()
+                record = json.dumps(
+                    {
+                        "user_id": str(user.id),
+                        "username": user.username,
+                        "from": prev_mode,
+                        "to": payload.tradingMode,
+                        "changed_at": datetime.now().isoformat(),
+                    },
+                    ensure_ascii=False,
+                )
+                limit = int(os.getenv("LIVE_SWITCH_AUDIT_LIMIT", "200").strip() or "200")
+                pipe = redis.pipeline()
+                pipe.lpush("audit:live_switch", record)
+                pipe.ltrim("audit:live_switch", 0, max(0, limit - 1))
+                await pipe.execute()
+                await redis.publish("audit:live_switch", record)
+            except Exception:
+                pass
 
         return await get_global_settings(user)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/live-audit")
+async def get_live_switch_audit(
+    user: CurrentUser = Depends(require_admin),
+    limit: int = 50,
+    offset: int = 0,
+):
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be <= 500")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    redis = await get_redis()
+    key = "audit:live_switch"
+    end = offset + limit - 1
+    rows = await redis.lrange(key, offset, end)
+    items = []
+    for raw in rows or []:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="ignore")
+        if isinstance(raw, str):
+            try:
+                items.append(json.loads(raw))
+            except Exception:
+                items.append({"message": raw})
+        else:
+            items.append({"message": str(raw)})
+    total = await redis.llen(key)
+    return {"success": True, "items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/simulation")

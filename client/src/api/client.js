@@ -246,6 +246,10 @@ export const configAPI = {
         method: 'PUT',
         body: JSON.stringify(payload),
     }),
+    getLiveSwitchAudit: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/config/live-audit${query ? '?' + query : ''}`);
+    },
 
     // 刷新配置缓存
     refreshCache: () => fetchAPI('/config/cache/refresh', { method: 'POST' }),
