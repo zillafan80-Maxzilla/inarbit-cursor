@@ -36,7 +36,7 @@ description: inarbit 高频交易系统重构任务清单
 
 ### 阶段 2: 数据与机会管线 🔄
 
-- [ ] 行情服务写入 Redis 指标校验
+- [x] 行情服务写入 Redis 指标校验
 - [ ] 三角/期现机会服务产出稳定性验证
 - [ ] 决策服务约束筛选链路验证
 - [ ] `/api/v1/system/metrics` 指标核对
@@ -259,3 +259,6 @@ cd engine && cargo build --release
 - WS 订单字段：实测 `ws://localhost:8001/ws/orders` 收到字段 `order_id/status/trading_mode/average_price/filled_quantity/fee/fee_currency/external_order_id`，与预期一致；detail 由 `OMS_PUBLISH_ORDER_DETAIL` 控制（plan_id/symbol/side/price 等）
 - WS detail 实测：重启后生效，WS 收到 detail 字段 `plan_id/symbol/side/order_type/price/quantity/leg_id/exchange_id/account_type` 等
 - OMS 异常场景：reconcile preview 批量返回 3 条结果；`auto_cancel` 模式 reconcile 成功
+- 行情 Redis 指标：`market_data_metrics`/`metrics:market_data_service` 均有 timestamp；symbols_spot=182；orderbook=5；fresh=false（需观察刷新间隔）
+- 回归范围补充：`tests/integration/test_global_strategy.py` 2 passed / 3 skipped；`tests/ui_smoke_test.py` 1 skipped
+- 机会产出稳定性：5 轮采样 `metrics_tri=0`、`metrics_cc=9~12`；API 列表 `tri=0/cc=0`（与 metrics 差异，需后续核对存储上限/刷新节奏）
