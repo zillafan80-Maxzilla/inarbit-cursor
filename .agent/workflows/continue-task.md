@@ -179,11 +179,17 @@ cd engine && cargo build --release
 | 模块 | 关键接口 | 关键依赖 | 状态 | 主要风险 |
 | --- | --- | --- | --- | --- |
 | client | REST `/api/v1/*`；WS `/ws/*` | FastAPI、WebSocket | 功能完整 | 401处理与权限细化不足、异常提示有限 |
+| client/pages | 管理页面路由与表单 | API 客户端 | 覆盖完整 | 复杂表单联动与空状态提示可加强 |
 | server/api | REST 路由与WS | services、db、auth | 完成度高 | 部分接口缺少限流/审计；密钥加密策略需加强 |
-| server/services | 决策/OMS/行情/机会 | Redis、PostgreSQL、ccxt | 关键链路基本齐备 | 真实交易失败回滚与风控联动需要强化 |
+| server/auth | `/api/v1/auth/*` | Redis、PostgreSQL | 完成度高 | 会话管理未做设备/来源绑定 |
+| server/services.market | 行情抓取与缓存 | ccxt、Redis | 关键链路可用 | 数据时延与缓存清理策略需验证 |
+| server/services.opportunity | 三角/期现机会 | Redis、行情服务 | 关键链路可用 | 机会质量与噪声过滤策略需长期观测 |
+| server/services.decision | 决策与约束 | Redis、配置服务 | 关键链路可用 | 约束配置误配会导致无决策 |
+| server/services.oms | 执行/对账/告警 | PostgreSQL、Redis、交易所 | 关键链路可用 | 真实交易回滚/补偿场景需压测 |
+| server/services.risk | 风控规则 | PostgreSQL、Redis | 基础可用 | 风控策略与覆盖度仍需完善 |
 | server/db | 连接池与缓存 | asyncpg、redis | 稳定 | 运行时健康与指标可观测性不足 |
 | engine | 策略引擎、信号发布 | Redis、PostgreSQL、交易所WS | 半完成 | 真实执行与风险检查未接入主流程 |
-| tests | 单测/集成 | pytest、服务运行环境 | 基础 | 覆盖不足、缺少端到端回归 |
+| tests | 单测/集成/E2E | pytest、服务运行环境 | 基础 | 覆盖不足、缺少长跑与容灾验证 |
 | config/docs | 快速启动/实施计划 | Docker、脚本 | 基础 | 与生产化部署差距大 |
 
 ---
@@ -197,18 +203,24 @@ cd engine && cargo build --release
 - Server：打通 “引擎信号→决策→OMS执行” 的统一管线
 - Server：确认 `OMS_PUBLISH_ORDER_DETAIL` 字段一致性
 - 数据：补齐 Redis 指标与机会链路校验脚本
+- OMS：执行计划创建→订单→成交→PNL 完整写入
+- 前端：策略热切换与默认策略自动启用流程联动验证
 
 ### M2：稳定性与可观测性
 - 指标：统一 metrics 输出（行情、机会、决策、OMS、风控）
 - 日志：结构化日志 + 关键路径 trace_id
 - 异常：OMS 失败补偿与重试策略验证
 - WebSocket：断线重连与限速压测
+- 数据：Redis/PG 连接池与慢查询监控
+- 安全：API key 加密存储与最小权限校验
 
 ### M3：安全与运维生产化
 - 安全：密钥管理替换固定密钥字符串
 - 部署：提供可复用部署模板（Docker Compose 或 k8s）
 - 测试：OMS/决策/风控端到端回归与E2E覆盖
 - 运维：发布流程、回滚策略、环境隔离
+- 监控：告警接入与值班通知闭环
+- 审计：关键操作日志保留与导出
 
 ---
 
@@ -230,3 +242,12 @@ cd engine && cargo build --release
 - 密钥与敏感信息不再硬编码，集中管理
 - 具备可复制的部署与回滚流程
 - 端到端回归通过率 >= 95%，覆盖核心交易路径
+
+---
+
+## 执行记录（最新）
+
+- 后端健康：`GET /` 返回 `status=running`
+- 指标快照：`/api/v1/system/metrics` 返回三角机会 12、期现机会 13、决策 2
+- 机会/决策抽样：`/api/v1/arbitrage/opportunities` 三角=0、期现=5；`/api/v1/decision/decisions` 决策=2（与指标存在差异需确认刷新节奏）
+- 数据新鲜度：`market_data_fresh=false`（age 8173ms > max 5000ms），需在后续稳定性任务中跟进
