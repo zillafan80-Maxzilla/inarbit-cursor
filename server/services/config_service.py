@@ -252,6 +252,21 @@ class ConfigService:
         for strategy_type, cfg in configs.items():
             key = f"config:opportunity:{user_id}:{strategy_type}"
             await redis.set(key, json.dumps(cfg.to_dict(), ensure_ascii=False))
+        await self._publish_opportunity_config_update(user_id, list(configs.keys()))
+
+    async def _publish_opportunity_config_update(self, user_id: UUID, strategy_types: list[str]) -> None:
+        if not strategy_types:
+            return
+        redis = await get_redis()
+        payload = json.dumps(
+            {
+                "user_id": str(user_id),
+                "strategy_types": strategy_types,
+                "updated_at": datetime.now().isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        await redis.publish("config:opportunity:updated", payload)
 
     def _validate_strategy_type(self, strategy_type: str) -> str:
         allowed = {"graph", "grid", "pair"}
