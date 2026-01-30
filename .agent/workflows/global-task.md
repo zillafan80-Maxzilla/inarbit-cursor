@@ -71,3 +71,34 @@ description: Inarbit 高频交易系统 - 全程任务清单
 1. 优先完成阶段 2/3 的核心链路验证
 2. 然后补齐阶段 4/5 的风控与引擎 TODO
 3. 最后完善测试与文档
+
+---
+
+## 当前断点（2026-01-30）
+
+### 已完成并推送
+
+- 修复 MaxDrawdownCircuitBreaker 峰值更新（a0c3df5）
+- 补齐 init.sql 与 migration_v5（35c9a2b）
+- start_server 自动端口回退并写入 `.cursor/api_port.json`（35c9a2b）
+- 测试用例读取动态 API base，回归通过（35c9a2b）
+- 补齐/修复核心模块：config_service、risk_manager、api/routes、engine main/strategy（35c9a2b）
+- `.cursor/` 已移出仓库并加入忽略（5f0d1ac）
+
+### 已验证
+
+- 回归测试：`python -m pytest -q` → 36 passed, 6 skipped
+
+### 待继续
+
+- 阶段 2/3/4/5 的链路验证仍未完成
+- 行情 -> 机会 -> 决策 -> OMS -> PnL 闭环验证
+- 风控连接器真实数据源对接与阈值调参
+- Rust executor 真实下单与回报处理补齐
+- 前端关键路径 E2E 与文档复核
+
+### 开发提示
+
+- Git 推送请使用：`scripts/git_ssh_443.ps1 push`
+- 后端启动：`python start_server.py`
+- API 基址：读取 `.cursor/api_port.json` 的 `base`
