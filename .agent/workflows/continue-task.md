@@ -257,5 +257,5 @@ cd engine && cargo build --release
 - OMS 闭环：`execute_latest`(paper) 成功；plans/orders/fills 各返回 3 条；PNL summary 字段齐全
 - OMS 接口健壮性：`plans/{id}/reconcile|refresh|cancel` 与 `orders/{id}/refresh|cancel` 均返回 success
 - WS 订单字段：实测 `ws://localhost:8001/ws/orders` 收到字段 `order_id/status/trading_mode/average_price/filled_quantity/fee/fee_currency/external_order_id`，与预期一致；detail 由 `OMS_PUBLISH_ORDER_DETAIL` 控制（plan_id/symbol/side/price 等）
-- WS detail 实测：启用 `OMS_PUBLISH_ORDER_DETAIL=1` 后仍未看到 plan_id/symbol/side/order_type 字段（当前进程未重载 env，需重启后复测）
+- WS detail 实测：重启后生效，WS 收到 detail 字段 `plan_id/symbol/side/order_type/price/quantity/leg_id/exchange_id/account_type` 等
 - OMS 异常场景：reconcile preview 批量返回 3 条结果；`auto_cancel` 模式 reconcile 成功
