@@ -103,6 +103,7 @@ class RiskManager:
         self.cache = cache_connector
         self.user_id = user_id
         self._load_config()
+        self._apply_config()
         
         # 初始化子模块
         self.total_equity_monitor = TotalEquityMonitor(
@@ -153,6 +154,53 @@ class RiskManager:
         else:
             logger.warning(f"风险配置文件不存在: {self.config_path}")
             self.config = {}
+
+    def _persist_config(self) -> None:
+        """持久化风险配置到YAML文件"""
+        try:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
+        except Exception as e:
+            logger.error(f"保存风险配置失败: {e}")
+
+    def _apply_config(self) -> None:
+        """将配置应用到子模块"""
+        try:
+            if hasattr(self.total_equity_monitor, "update_config"):
+                self.total_equity_monitor.update_config(self.config.get("total_equity", {}))
+            if hasattr(self.max_drawdown_cb, "update_config"):
+                self.max_drawdown_cb.update_config(self.config.get("max_drawdown", {}))
+            if hasattr(self.exposure_limiter, "update_config"):
+                self.exposure_limiter.update_config(self.config.get("exposure", {}))
+            if hasattr(self.rebalancer, "update_config"):
+                self.rebalancer.update_config(self.config.get("rebalancer", {}))
+            if hasattr(self.funding_rate_monitor, "update_config"):
+                self.funding_rate_monitor.update_config(self.config.get("funding_rate", {}))
+            if hasattr(self.auto_transfer, "update_config"):
+                self.auto_transfer.update_config(self.config.get("auto_transfer", {}))
+            if hasattr(self.panic_button, "update_config"):
+                self.panic_button.update_config(self.config.get("panic", {}))
+            if hasattr(self.api_key_reloader, "update_config"):
+                self.api_key_reloader.update_config(self.config.get("api_key_reload", {}))
+        except Exception as e:
+            logger.error(f"应用风险配置失败: {e}", exc_info=True)
+
+    def get_config(self) -> Dict[str, Any]:
+        return self.config
+
+    def reload_config(self) -> None:
+        self._load_config()
+        self._apply_config()
+
+    def update_config(self, patch: Dict[str, Any], persist: bool = True) -> None:
+        """更新配置并应用"""
+        if not isinstance(patch, dict):
+            raise ValueError("config patch must be dict")
+        self.config = _deep_merge_dict(self.config or {}, patch)
+        self._apply_config()
+        if persist:
+            self._persist_config()
 
     async def check(self) -> bool:
         """
@@ -229,6 +277,13 @@ class TotalEquityMonitor:
         except Exception as e:
             logger.error(f"总权益检查异常: {e}", exc_info=True)
             return False
+
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "threshold" in cfg:
+            try:
+                self.threshold = float(cfg.get("threshold"))
+            except Exception:
+                pass
 
     async def _fetch_equity(self) -> float:
         """
@@ -311,6 +366,18 @@ class MaxDrawdownCircuitBreaker:
             logger.error(f"回撤检查异常: {e}", exc_info=True)
             return False
 
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "max_drawdown" in cfg:
+            try:
+                self.max_drawdown = float(cfg.get("max_drawdown"))
+            except Exception:
+                pass
+        if "peak_equity" in cfg:
+            try:
+                self.peak_equity = float(cfg.get("peak_equity"))
+            except Exception:
+                pass
+
     async def _fetch_equity(self) -> float:
         """获取当前权益"""
         if self.cache:
@@ -388,6 +455,18 @@ class ExposureLimiter:
         except Exception as e:
             logger.error(f"敞口检查异常: {e}", exc_info=True)
             return False
+
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "limit" in cfg:
+            try:
+                self.limit = float(cfg.get("limit"))
+            except Exception:
+                pass
+        if "total_limit" in cfg:
+            try:
+                self.total_limit = float(cfg.get("total_limit"))
+            except Exception:
+                pass
 
     async def _fetch_portfolio(self) -> Optional[PortfolioSnapshot]:
         """获取投资组合快照"""
@@ -468,6 +547,19 @@ class Rebalancer:
             logger.error(f"再平衡检查异常: {e}", exc_info=True)
             return False
 
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "enabled" in cfg:
+            self.enabled = bool(cfg.get("enabled"))
+        if "target_allocation" in cfg:
+            value = cfg.get("target_allocation")
+            if isinstance(value, dict):
+                self.target_allocation = value
+        if "threshold" in cfg:
+            try:
+                self.threshold = float(cfg.get("threshold"))
+            except Exception:
+                pass
+
     async def _fetch_portfolio(self) -> Optional[PortfolioSnapshot]:
         """获取投资组合"""
         if self.cache:
@@ -541,6 +633,18 @@ class FundingRateMonitor:
             logger.error(f"资金费率检查异常: {e}", exc_info=True)
             return False
 
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "max_rate" in cfg:
+            try:
+                self.max_funding_rate = float(cfg.get("max_rate"))
+            except Exception:
+                pass
+        if "min_rate" in cfg:
+            try:
+                self.min_funding_rate = float(cfg.get("min_rate"))
+            except Exception:
+                pass
+
     async def _fetch_funding_rates(self) -> Dict[str, float]:
         """从交易所获取所有永续合约的资金费率"""
         funding_rates = {}
@@ -597,6 +701,12 @@ class AutoTransfer:
             logger.error(f"自动转账异常: {e}", exc_info=True)
             return False
 
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "mode" in cfg:
+            self.mode = str(cfg.get("mode"))
+        if "enabled" in cfg:
+            self.enabled = bool(cfg.get("enabled"))
+
 
 class PanicButton:
     """紧急停止按钮"""
@@ -622,6 +732,12 @@ class PanicButton:
         """重置紧急停止"""
         self.triggered = False
         logger.info("紧急停止已重置")
+
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "enabled" in cfg:
+            self.enabled = bool(cfg.get("enabled"))
+            if not self.enabled:
+                self.triggered = False
 
 
 class ApiKeyHotReloader:
@@ -656,6 +772,22 @@ class ApiKeyHotReloader:
         except Exception as e:
             logger.error(f"API密钥重载检查异常: {e}", exc_info=True)
             return False
+
+    def update_config(self, cfg: Dict[str, Any]) -> None:
+        if "enabled" in cfg:
+            self.enabled = bool(cfg.get("enabled"))
+        if "watch_path" in cfg:
+            self.watch_path = str(cfg.get("watch_path"))
+
+
+def _deep_merge_dict(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base or {})
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged.get(key) or {}, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 class PostgresRiskDatabaseConnector(DatabaseConnector):
