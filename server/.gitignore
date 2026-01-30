@@ -1,0 +1,7 @@
+# 忽略敏感配置文件
+.env
+*.pyc
+__pycache__/
+venv/
+.venv/
+*.log

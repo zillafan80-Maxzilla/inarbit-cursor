@@ -1,0 +1,40 @@
+# Inarbit HFT 基础服务配置
+
+services:
+  # PostgreSQL 数据库 - 静态数据存储
+  postgres:
+    image: postgres:15-alpine
+    container_name: inarbit-postgres
+    environment:
+      POSTGRES_DB: inarbit
+      POSTGRES_USER: inarbit
+      POSTGRES_PASSWORD: inarbit_secret_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./server/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U inarbit -d inarbit" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - 实时数据缓存
+  redis:
+    image: redis:7-alpine
+    container_name: inarbit-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,36 @@
+# Inarbit 后端依赖
+
+# Web 框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0  # 配置验证
+
+# 数据库
+asyncpg>=0.29.0
+redis>=5.0.0
+
+# 交易所 API
+ccxt>=4.1.0
+
+# 异步 HTTP
+aiohttp>=3.9.0
+
+# 数据处理
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 图算法（用于图搜索套利）
+networkx>=3.0
+
+# 环境配置
+python-dotenv>=1.0.0
+
+# 加密
+cryptography>=41.0.0
+
+# websockets
+websockets>=12.0
+
+# 日志
+python-json-logger>=2.0.0

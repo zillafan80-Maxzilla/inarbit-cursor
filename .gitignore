@@ -1,0 +1,42 @@
+# logs
+logs/
+# 环境文件（包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 依赖目录
+node_modules
+venv
+__pycache__
+*.pyc
+
+# 构建输出
+dist
+dist-ssr
+build
+*.local
+engine/target
+engine/target/**
+engine/build_*.txt
+engine/cargo_*.txt
+engine/check_result*.txt
+
+# 日志
+*.log
+server/*.log
+
+# IDE
+.vscode
+.idea
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 密钥文件
+*.pem
+*.key
+serviceAccountKey.json
+%KEY%
+%KEY%.pub
