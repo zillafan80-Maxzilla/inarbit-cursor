@@ -137,7 +137,11 @@ class DatabaseManager:
             logger.info("PostgreSQL 连接池已关闭")
         
         if self._redis_client:
-            await self._redis_client.close()
+            close_fn = getattr(self._redis_client, "aclose", None)
+            if callable(close_fn):
+                await close_fn()
+            else:
+                await self._redis_client.close()
             logger.info("Redis 连接已关闭")
     
     @property
