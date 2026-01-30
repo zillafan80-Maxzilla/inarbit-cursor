@@ -62,6 +62,7 @@ class TradingPair:
             'supportedExchanges': self.supported_exchanges or []
         }
 
+
 @dataclass
 class OpportunityConfig:
     """机会配置"""
@@ -77,6 +78,7 @@ class OpportunityConfig:
             "version": self.version,
             "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
         }
+
 
 # ============================================
 # 默认配置（用于初始化）
@@ -419,22 +421,21 @@ class ConfigService:
 
     async def get_opportunity_config(self, strategy_type: str, user_id: UUID) -> OpportunityConfig:
         normalized = self._validate_strategy_type(strategy_type)
-        cache = self._opportunity_cache.get(str(user_id)) or {}
-        if normalized not in cache:
+        user_key = str(user_id)
+        if user_key not in self._opportunity_cache:
             await self._load_opportunity_configs(user_id)
-            cache = self._opportunity_cache.get(str(user_id)) or {}
 
+        cache = self._opportunity_cache.get(user_key) or {}
         if normalized in cache:
             return cache[normalized]
 
         return OpportunityConfig(strategy_type=normalized, config={}, version=1, updated_at=None)
 
     async def get_all_opportunity_configs(self, user_id: UUID) -> List[OpportunityConfig]:
-        cache = self._opportunity_cache.get(str(user_id)) or {}
-        if not cache:
+        user_key = str(user_id)
+        if user_key not in self._opportunity_cache:
             await self._load_opportunity_configs(user_id)
-            cache = self._opportunity_cache.get(str(user_id)) or {}
-        return list(cache.values())
+        return list((self._opportunity_cache.get(user_key) or {}).values())
 
     async def update_opportunity_config(self, strategy_type: str, config: dict, user_id: UUID) -> OpportunityConfig:
         normalized = self._validate_strategy_type(strategy_type)

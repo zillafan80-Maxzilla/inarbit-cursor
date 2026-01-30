@@ -1,4 +1,5 @@
 import asyncio, traceback, sys, os, logging
+import pytest
 from pathlib import Path
 
 # Load environment from .env
@@ -8,7 +9,8 @@ load_dotenv()
 
 logging.basicConfig(level=logging.DEBUG)
 
-async def test():
+@pytest.mark.asyncio
+async def test_db_connection():
     from server.db import DatabaseManager
     db = DatabaseManager.get_instance()
     print(f"PG: {db.pg_host}:{db.pg_port} user={db.pg_user} db={db.pg_database}")
@@ -24,4 +26,4 @@ async def test():
         await db.close()
 
 if __name__ == "__main__":
-    asyncio.run(test())
+    asyncio.run(test_db_connection())

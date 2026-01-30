@@ -1,4 +1,4 @@
-﻿//! 多交易所 WebSocket 连接模块
+//! 多交易所 WebSocket 连接模块
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -21,6 +21,7 @@ pub enum ExchangeId {
     Mexc,
 }
 
+#[allow(dead_code)]
 impl ExchangeId {
     /// 获取 WebSocket URL
     pub fn ws_url(&self) -> &'static str {
@@ -48,12 +49,14 @@ pub struct Ticker {
 }
 
 /// 交易所连接
+#[allow(dead_code)]
 pub struct ExchangeConnection {
     pub id: ExchangeId,
     pub ticker_tx: broadcast::Sender<Ticker>,
     active: Arc<RwLock<bool>>,
 }
 
+#[allow(dead_code)]
 impl ExchangeConnection {
     /// 创建新连接
     pub async fn new(id: ExchangeId) -> Result<Self> {
@@ -209,6 +212,7 @@ impl ExchangeConnection {
 
 /// 交易所配置
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ExchangeConfig {
     pub id: ExchangeId,
     pub api_key: String,

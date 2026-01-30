@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::exchange::{ExchangeConnection, ExchangeId, Ticker};
 use crate::executor::OrderExecutor;
-use crate::risk::GLOBAL_RISK_MANAGER;
+use crate::risk::{GLOBAL_RISK_MANAGER, RiskCheck};
 
 /// 策略类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
@@ -56,6 +56,7 @@ pub struct StrategyConfig {
 
 /// 策略特征 (Trait)
 #[async_trait]
+#[allow(dead_code)]
 pub trait Strategy: Send + Sync {
     /// 获取策略类型
     fn strategy_type(&self) -> StrategyType;
@@ -92,8 +93,11 @@ impl Engine {
         }
     }
 
-    /// 从数据库加载启用的策略
-    pub async fn load_enabled_strategies(&mut self) -> Result<()> {
+    /// 从数据库加载启用的策略（无配置时加载默认策略）
+    pub async fn load_enabled_strategies(
+        &mut self,
+        exchanges: &HashMap<ExchangeId, Arc<ExchangeConnection>>,
+    ) -> Result<()> {
         let configs: Vec<StrategyConfig> = sqlx::query_as(
             r#"
             SELECT id, strategy_type, name, is_enabled, priority,
@@ -109,7 +113,54 @@ impl Engine {
         .await?;
 
         let mut strategies = self.strategies.write().await;
-        
+
+        if configs.is_empty() {
+            if let Some(exchange_id) = choose_default_exchange(exchanges) {
+                let bases = self.get_top_base_symbols(exchange_id, 3).await;
+                let fallback_bases = vec!["BTC".to_string(), "ETH".to_string(), "BNB".to_string()];
+                let selected_bases = if bases.is_empty() { fallback_bases } else { bases };
+                let triangles = build_triangles(exchange_id, &selected_bases);
+
+                let triangle_payload: Vec<Vec<String>> = triangles
+                    .iter()
+                    .map(|(a, b, c)| vec![a.clone(), b.clone(), c.clone()])
+                    .collect();
+
+                let default_config = StrategyConfig {
+                    id: Uuid::new_v4(),
+                    strategy_type: StrategyType::Triangular,
+                    name: "default-triangular".to_string(),
+                    is_enabled: true,
+                    priority: 1,
+                    capital_percent: 20.0,
+                    per_trade_limit: 100.0,
+                    config: serde_json::json!({
+                        "triangles": triangle_payload,
+                        "bases": selected_bases,
+                        "exchange_id": format!("{:?}", exchange_id).to_lowercase(),
+                        "default": true,
+                    }),
+                };
+
+                match self.create_strategy(default_config.clone()) {
+                    Ok(strategy) => {
+                        info!(
+                            "未启用任何策略，已加载默认三角策略（exchange={}, bases={:?}）",
+                            format!("{:?}", exchange_id).to_lowercase(),
+                            default_config.config.get("bases")
+                        );
+                        strategies.push(strategy);
+                    }
+                    Err(e) => {
+                        error!("创建默认策略失败: {}", e);
+                    }
+                }
+            } else {
+                warn!("未发现可用交易所连接，无法加载默认策略");
+            }
+            return Ok(());
+        }
+
         for config in configs {
             match self.create_strategy(config.clone()) {
                 Ok(strategy) => {
@@ -123,6 +174,72 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    async fn get_top_base_symbols(&self, exchange_id: ExchangeId, limit: usize) -> Vec<String> {
+        let exchange_key = format!("{:?}", exchange_id).to_lowercase();
+        let index_key = format!("symbols:ticker:{}", exchange_key);
+
+        let mut conn = match self.redis.get_multiplexed_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                warn!("读取 Redis 失败，无法获取交易量排行: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let symbols: Vec<String> = match redis::AsyncCommands::smembers(&mut conn, &index_key).await {
+            Ok(list) => list,
+            Err(_) => return Vec::new(),
+        };
+
+        if symbols.is_empty() {
+            return Vec::new();
+        }
+
+        let mut pipe = redis::pipe();
+        for symbol in &symbols {
+            let key = format!("ticker:{}:{}", exchange_key, symbol);
+            pipe.cmd("HGET").arg(key).arg("volume");
+        }
+
+        let volumes: Vec<Option<String>> = pipe.query_async(&mut conn).await.unwrap_or_default();
+        let mut ranked: Vec<(String, f64)> = Vec::new();
+        for (symbol, volume_raw) in symbols.into_iter().zip(volumes.into_iter()) {
+            if !symbol.ends_with("/USDT") && !symbol.ends_with("-USDT") && !symbol.ends_with("USDT") {
+                continue;
+            }
+            let volume = volume_raw
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            ranked.push((symbol, volume));
+        }
+
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for (symbol, _) in ranked {
+            let base = if let Some((base, _)) = symbol.split_once('/') {
+                base.to_string()
+            } else if let Some((base, _)) = symbol.split_once('-') {
+                base.to_string()
+            } else if symbol.ends_with("USDT") {
+                symbol.trim_end_matches("USDT").to_string()
+            } else {
+                continue;
+            };
+
+            if base.is_empty() || !seen.insert(base.clone()) {
+                continue;
+            }
+            out.push(base);
+            if out.len() >= limit {
+                break;
+            }
+        }
+
+        out
     }
 
     /// 根据配置创建策略实例
@@ -286,6 +403,39 @@ impl Engine {
     }
 }
 
+fn choose_default_exchange(
+    exchanges: &HashMap<ExchangeId, Arc<ExchangeConnection>>,
+) -> Option<ExchangeId> {
+    if exchanges.contains_key(&ExchangeId::Binance) {
+        return Some(ExchangeId::Binance);
+    }
+    if exchanges.contains_key(&ExchangeId::Okx) {
+        return Some(ExchangeId::Okx);
+    }
+    exchanges.keys().next().copied()
+}
+
+fn build_triangles(exchange_id: ExchangeId, bases: &[String]) -> Vec<(String, String, String)> {
+    let sep = match exchange_id {
+        ExchangeId::Okx => "-",
+        _ => "",
+    };
+
+    let mut out = Vec::new();
+    for a in bases {
+        for b in bases {
+            if a == b {
+                continue;
+            }
+            let pair1 = format!("{}{}USDT", a, sep);
+            let pair2 = format!("{}{}{}", b, sep, a);
+            let pair3 = format!("{}{}USDT", b, sep);
+            out.push((pair1, pair2, pair3));
+        }
+    }
+    out
+}
+
 // ============================================
 // 策略实现
 // ============================================
@@ -316,14 +466,36 @@ impl TriangularStrategy {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.001); // 默认 0.1%
         
-        // 预定义常见的三角路径
-        let triangles = vec![
+        // 预定义常见的三角路径（可被配置覆盖）
+        let fallback_triangles = vec![
             ("BTCUSDT".to_string(), "ETHBTC".to_string(), "ETHUSDT".to_string()),
             ("BTCUSDT".to_string(), "BNBBTC".to_string(), "BNBUSDT".to_string()),
             ("ETHUSDT".to_string(), "BNBETH".to_string(), "BNBUSDT".to_string()),
             ("BTCUSDT".to_string(), "SOLBTC".to_string(), "SOLUSDT".to_string()),
             ("BTCUSDT".to_string(), "XRPBTC".to_string(), "XRPUSDT".to_string()),
         ];
+
+        let triangles = config
+            .config
+            .get("triangles")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                let mut out = Vec::new();
+                for item in items {
+                    if let Some(arr) = item.as_array() {
+                        if arr.len() == 3 {
+                            if let (Some(a), Some(b), Some(c)) =
+                                (arr[0].as_str(), arr[1].as_str(), arr[2].as_str())
+                            {
+                                out.push((a.to_string(), b.to_string(), c.to_string()));
+                            }
+                        }
+                    }
+                }
+                out
+            })
+            .filter(|out| !out.is_empty())
+            .unwrap_or(fallback_triangles);
         
         Self { 
             config,
@@ -662,6 +834,7 @@ impl Strategy for FundingRateStrategy {
 
 impl FundingRateStrategy {
     /// 更新资金费率（由外部调用）
+    #[allow(dead_code)]
     pub fn update_funding_rate(&mut self, symbol: &str, rate: f64, next_time: i64) {
         self.funding_rates.insert(symbol.to_string(), (rate, next_time));
     }
@@ -679,6 +852,7 @@ pub struct GridStrategy {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct GridConfig {
     upper_price: f64,      // 网格上限
     lower_price: f64,      // 网格下限

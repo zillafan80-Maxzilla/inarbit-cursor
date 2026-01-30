@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     let mut strategy_engine = strategy::Engine::new(db_pool.clone(), redis_client.clone());
     
     // 加载启用的策略
-    strategy_engine.load_enabled_strategies().await?;
+    strategy_engine.load_enabled_strategies(&exchanges).await?;
     info!("已加载 {} 个策略", strategy_engine.strategy_count());
 
     // 初始化执行引擎

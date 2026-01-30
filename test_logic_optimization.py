@@ -5,10 +5,13 @@
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from server.db.connection import DatabaseManager
+
+pytestmark = pytest.mark.asyncio
 
 
 async def test_database_schema():

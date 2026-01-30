@@ -6,10 +6,12 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct RiskManager {
     // 配置可以从 YAML 加载，这里使用占位结构
+    #[allow(dead_code)]
     pub config: Arc<RiskConfig>,
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct RiskConfig {
     pub max_drawdown: f64, // 如 0.2 表示 20%
     pub exposure_limit: f64,
@@ -21,7 +23,7 @@ impl RiskManager {
         Self { config: Arc::new(config) }
     }
 
-    pub async fn check(&self, signal: &Signal) -> bool {
+    pub async fn check(&self, _signal: &Signal) -> bool {
         // 简化示例：总是返回 true，实际实现应查询数据库/缓存
         // TODO: 实现总权益、回撤、敞口等检查逻辑
         true

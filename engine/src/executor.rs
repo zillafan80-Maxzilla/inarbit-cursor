@@ -18,6 +18,7 @@ pub enum OrderSide {
 
 /// 订单类型
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum OrderType {
     Market,
     Limit,
@@ -25,6 +26,7 @@ pub enum OrderType {
 
 /// 订单请求
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct OrderRequest {
     pub exchange: ExchangeId,
     pub symbol: String,
@@ -70,6 +72,7 @@ pub struct ExecutionResult {
 
 /// 订单执行器
 pub struct OrderExecutor {
+    #[allow(dead_code)]
     exchanges: HashMap<ExchangeId, Arc<ExchangeConnection>>,
     // 可选: 模拟模式
     simulation_mode: bool,
@@ -140,6 +143,7 @@ impl OrderExecutor {
     }
 
     /// 执行市价单
+    #[allow(dead_code)]
     pub async fn market_order(
         &self,
         exchange: ExchangeId,
@@ -160,6 +164,7 @@ impl OrderExecutor {
     }
 
     /// 执行限价单
+    #[allow(dead_code)]
     pub async fn limit_order(
         &self,
         exchange: ExchangeId,
@@ -181,6 +186,7 @@ impl OrderExecutor {
     }
 
     /// 发送订单到交易所
+    #[allow(dead_code)]
     async fn send_order(&self, request: OrderRequest) -> Result<OrderResponse> {
         let _conn = self.exchanges.get(&request.exchange)
             .ok_or_else(|| anyhow::anyhow!("交易所 {:?} 未连接", request.exchange))?;
@@ -222,6 +228,7 @@ impl OrderExecutor {
     }
 
     /// 批量执行订单 (原子性套利)
+    #[allow(dead_code)]
     pub async fn execute_batch(&self, orders: Vec<OrderRequest>) -> Result<Vec<OrderResponse>> {
         // 并发执行所有订单
         let mut handles = vec![];
@@ -246,6 +253,7 @@ impl OrderExecutor {
     }
 
     /// 为异步任务克隆自身
+    #[allow(dead_code)]
     fn clone_for_task(&self) -> Self {
         Self {
             exchanges: self.exchanges.clone(),

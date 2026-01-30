@@ -111,8 +111,9 @@ class TestHealthCheckIntegration:
                 if response.status_code == 200:
                     data = response.json()
                     assert "status" in data
-                    assert "postgres" in data
-                    assert "redis" in data
+                    checks = data.get("checks", {})
+                    assert "postgres" in checks
+                    assert "redis" in checks
                     print(f"✅ 健康检查正常: {data}")
                 else:
                     pytest.skip(f"API返回状态码: {response.status_code}")

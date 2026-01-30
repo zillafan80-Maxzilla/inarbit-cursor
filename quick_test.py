@@ -4,11 +4,12 @@
 import sys
 import asyncio
 from pathlib import Path
+import pytest
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-def test_imports():
+def _test_imports() -> bool:
     """测试所有关键模块能否导入"""
     print("=" * 60)
     print("TEST: 模块导入")
@@ -41,7 +42,11 @@ def test_imports():
         return False
 
 
-async def test_database():
+def test_imports():
+    assert _test_imports()
+
+
+async def _test_database() -> bool:
     """测试数据库连接"""
     print("\n" + "=" * 60)
     print("TEST: 数据库连接")
@@ -74,6 +79,11 @@ async def test_database():
         return False
 
 
+@pytest.mark.asyncio
+async def test_database():
+    assert await _test_database()
+
+
 async def quick_test():
     """快速测试"""
     print("\n" + "=" * 30)
@@ -81,12 +91,12 @@ async def quick_test():
     print("=" * 30 + "\n")
     
     # 步骤1：测试导入
-    if not test_imports():
+    if not _test_imports():
         print("\nERROR: 请先安装依赖: pip install -r server/requirements.txt")
         return False
     
     # 步骤2：测试数据库
-    if not await test_database():
+    if not await _test_database():
         print("\nERROR: 请先启动数据库: docker-compose up -d")
         return False
     

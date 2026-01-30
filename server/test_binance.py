@@ -4,6 +4,7 @@ Binance 实时数据获取测试脚本
 """
 import asyncio
 import os
+import pytest
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -15,6 +16,7 @@ except ImportError:
     print("请先安装 ccxt: pip install ccxt python-dotenv")
     exit(1)
 
+@pytest.mark.asyncio
 async def test_binance_connection():
     """测试 Binance API 连接"""
     
