@@ -253,3 +253,5 @@ cd engine && cargo build --release
 - 数据新鲜度：首次 `market_data_fresh=false`（age 8173ms > max 5000ms），二次检查为 `true`（age 4312ms），需继续观察稳定性
 - 决策约束：`/api/v1/decision/constraints` 与 `constraints/auto/effective` 正常返回（auto 中有黑名单与平均数据延迟）
 - OMS 告警：`/api/v1/oms/alerts` 返回 0 条记录（当前无告警样本）
+- 机会链路：metrics 三角=0 与 zset=0 一致；期现 metrics=16，而 zset=8/接口=9（推测扫描总量与写入上限/滚动更新存在差异）
+- OMS 闭环：`execute_latest`(paper) 成功；plans/orders/fills 各返回 3 条；PNL summary 字段齐全
