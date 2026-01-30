@@ -364,6 +364,10 @@ impl Engine {
     async fn record_signal_metric(&self, signal: &Signal) {
         if let Ok(mut conn) = self.redis.get_multiplexed_async_connection().await {
             use redis::AsyncCommands;
+            let strategy_key = format!(
+                "metrics:engine:strategy:{}",
+                format!("{:?}", signal.strategy_type).to_lowercase()
+            );
             let _: Result<(), _> = conn.hset(
                 "metrics:engine",
                 "last_signal_ts",
@@ -375,18 +379,34 @@ impl Engine {
                 format!("{:?}", signal.strategy_type).to_lowercase(),
             ).await;
             let _: Result<(), _> = conn.incr("metrics:engine:signal_count", 1_i64).await;
+            let _: Result<(), _> = conn.incr(format!("{}:signal_count", strategy_key), 1_i64).await;
+            let _: Result<(), _> = conn.hset(
+                &strategy_key,
+                "last_signal_ts",
+                signal.timestamp.to_string(),
+            ).await;
         }
     }
 
     async fn record_blocked_metric(&self, strategy_type: StrategyType) {
         if let Ok(mut conn) = self.redis.get_multiplexed_async_connection().await {
             use redis::AsyncCommands;
+            let strategy_key = format!(
+                "metrics:engine:strategy:{}",
+                format!("{:?}", strategy_type).to_lowercase()
+            );
             let _: Result<(), _> = conn.hset(
                 "metrics:engine",
                 "last_blocked_strategy_type",
                 format!("{:?}", strategy_type).to_lowercase(),
             ).await;
             let _: Result<(), _> = conn.incr("metrics:engine:blocked_count", 1_i64).await;
+            let _: Result<(), _> = conn.incr(format!("{}:blocked_count", strategy_key), 1_i64).await;
+            let _: Result<(), _> = conn.hset(
+                &strategy_key,
+                "last_blocked_ts",
+                chrono::Utc::now().timestamp_millis().to_string(),
+            ).await;
         }
     }
 
