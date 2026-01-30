@@ -133,6 +133,7 @@ class ServiceContainer:
 
 
 # 导出所有服务
+from .config_service import ConfigService, get_config_service
 from .exchange_service import ExchangeService
 from .order_service import OrderService, PnLService
 from .market_data_service import MarketDataService
@@ -150,6 +151,7 @@ def get_decision_service():
 __all__ = [
     "ServiceContainer",
     "ConfigService",
+    "get_config_service",
     "MarketDataService",
     "MarketDataRepository",
     "TriangularOpportunityService",

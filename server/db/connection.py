@@ -58,62 +58,102 @@ class DatabaseManager:
         优化: 添加连接池监控、慢查询日志
         """
         logger.info("正在初始化数据库连接...")
+
+        try:
+            pg_retries = int(os.getenv("PG_INIT_RETRIES", "5").strip() or "5")
+        except Exception:
+            pg_retries = 5
+        try:
+            pg_retry_delay = float(os.getenv("PG_INIT_RETRY_DELAY_SECONDS", "1").strip() or "1")
+        except Exception:
+            pg_retry_delay = 1.0
+        try:
+            pg_retry_max_delay = float(os.getenv("PG_INIT_RETRY_MAX_DELAY_SECONDS", "5").strip() or "5")
+        except Exception:
+            pg_retry_max_delay = 5.0
         
         # 初始化 PostgreSQL 连接池
-        try:
-            self._pg_pool = await asyncpg.create_pool(
-                host=self.pg_host,
-                port=self.pg_port,
-                user=self.pg_user,
-                password=self.pg_password,
-                database=self.pg_database,
-                min_size=5,
-                max_size=20,
-                command_timeout=60,
-                # 添加连接初始化回调
-                init=self._init_connection
-            )
-            
-            # 测试连接并获取版本信息
-            async with self._pg_pool.acquire() as conn:
-                version = await conn.fetchval("SELECT version()")
-                db_size = await conn.fetchval("SELECT pg_database_size(current_database())")
-                logger.info(
-                    f"✅ PostgreSQL 连接池已创建 ({self.pg_host}:{self.pg_port}) | "
-                    f"连接池大小: 5-20 | "
-                    f"数据库大小: {db_size / 1024 / 1024:.2f} MB"
+        last_error = None
+        for attempt in range(1, max(1, pg_retries) + 1):
+            try:
+                self._pg_pool = await asyncpg.create_pool(
+                    host=self.pg_host,
+                    port=self.pg_port,
+                    user=self.pg_user,
+                    password=self.pg_password,
+                    database=self.pg_database,
+                    min_size=5,
+                    max_size=20,
+                    command_timeout=60,
+                    # 添加连接初始化回调
+                    init=self._init_connection
                 )
-                logger.debug(f"PostgreSQL 版本: {version}")
-                
-        except Exception as e:
-            logger.error(f"❌ PostgreSQL 连接失败: {e}")
-            raise
+
+                # 测试连接并获取版本信息
+                async with self._pg_pool.acquire() as conn:
+                    version = await conn.fetchval("SELECT version()")
+                    db_size = await conn.fetchval("SELECT pg_database_size(current_database())")
+                    logger.info(
+                        f"✅ PostgreSQL 连接池已创建 ({self.pg_host}:{self.pg_port}) | "
+                        f"连接池大小: 5-20 | "
+                        f"数据库大小: {db_size / 1024 / 1024:.2f} MB"
+                    )
+                    logger.debug(f"PostgreSQL 版本: {version}")
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if attempt >= pg_retries:
+                    logger.error(f"❌ PostgreSQL 连接失败: {e}")
+                    raise
+                logger.warning(f"PostgreSQL 连接失败，{pg_retry_delay:.1f}s 后重试 ({attempt}/{pg_retries})")
+                await asyncio.sleep(pg_retry_delay)
+                pg_retry_delay = min(pg_retry_delay * 2, pg_retry_max_delay)
         
-        # 初始化 Redis 连接
         try:
-            self._redis_client = redis.Redis(
-                host=self.redis_host,
-                port=self.redis_port,
-                password=self.redis_password,
-                db=self.redis_db,
-                decode_responses=True,
-                socket_timeout=5,
-                socket_connect_timeout=5,
-                max_connections=200  # 增加连接池大小，避免并发任务耗尽连接
-            )
-            # 测试连接
-            await self._redis_client.ping()
-            
-            # 获取 Redis 信息
-            info = await self._redis_client.info('memory')
-            used_memory = info.get('used_memory_human', 'Unknown')
-            logger.info(
-                f"✅ Redis 连接已建立 ({self.redis_host}:{self.redis_port}) | "
-                f"内存使用: {used_memory}"
-            )
-        except Exception as e:
-            logger.error(f"❌ Redis 连接失败: {e}")
-            raise
+            redis_retries = int(os.getenv("REDIS_INIT_RETRIES", "5").strip() or "5")
+        except Exception:
+            redis_retries = 5
+        try:
+            redis_retry_delay = float(os.getenv("REDIS_INIT_RETRY_DELAY_SECONDS", "1").strip() or "1")
+        except Exception:
+            redis_retry_delay = 1.0
+        try:
+            redis_retry_max_delay = float(os.getenv("REDIS_INIT_RETRY_MAX_DELAY_SECONDS", "5").strip() or "5")
+        except Exception:
+            redis_retry_max_delay = 5.0
+
+        # 初始化 Redis 连接
+        for attempt in range(1, max(1, redis_retries) + 1):
+            try:
+                self._redis_client = redis.Redis(
+                    host=self.redis_host,
+                    port=self.redis_port,
+                    password=self.redis_password,
+                    db=self.redis_db,
+                    decode_responses=True,
+                    socket_timeout=5,
+                    socket_connect_timeout=5,
+                    max_connections=200  # 增加连接池大小，避免并发任务耗尽连接
+                )
+                # 测试连接
+                await self._redis_client.ping()
+
+                # 获取 Redis 信息
+                info = await self._redis_client.info('memory')
+                used_memory = info.get('used_memory_human', 'Unknown')
+                logger.info(
+                    f"✅ Redis 连接已建立 ({self.redis_host}:{self.redis_port}) | "
+                    f"内存使用: {used_memory}"
+                )
+                break
+            except Exception as e:
+                if attempt >= redis_retries:
+                    logger.error(f"❌ Redis 连接失败: {e}")
+                    raise
+                logger.warning(f"Redis 连接失败，{redis_retry_delay:.1f}s 后重试 ({attempt}/{redis_retries})")
+                await asyncio.sleep(redis_retry_delay)
+                redis_retry_delay = min(redis_retry_delay * 2, redis_retry_max_delay)
         
         logger.info("🎉 所有数据库连接初始化完成")
     

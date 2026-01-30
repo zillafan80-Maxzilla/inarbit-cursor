@@ -2,15 +2,15 @@
 -- Per-user strategy-level configuration for Graph/Grid/Pair
 
 CREATE TABLE IF NOT EXISTS opportunity_configs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    strategy_type strategy_type NOT NULL,
-    config JSONB NOT NULL DEFAULT '{}'::jsonb,
-    version INT NOT NULL DEFAULT 1,
-    is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE (user_id, strategy_type)
+ id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+ user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+ strategy_type strategy_type NOT NULL,
+ config JSONB NOT NULL DEFAULT '{}'::jsonb,
+ version INT NOT NULL DEFAULT 1,
+ is_active BOOLEAN NOT NULL DEFAULT true,
+ created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+ updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+ UNIQUE (user_id, strategy_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_opportunity_configs_user ON opportunity_configs(user_id);

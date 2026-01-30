@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("🚀 正在启动 Inarbit API Server V3.0...")
     logger.info("=" * 60)
-    
+
     try:
         # 1. 初始化数据库连接
         logger.info("📊 初始化数据库连接...")

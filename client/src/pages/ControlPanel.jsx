@@ -3,7 +3,7 @@
  * 重构版 - 运行状态合并入卡片、四卡两两并排、状态中文化
  */
 import React, { useState, useEffect } from 'react';
-import { useStrategies } from '../api/hooks';
+import { useStrategies, useSignals } from '../api/hooks';
 
 const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) => {
     const isRunning = botStatus === 'running';
@@ -14,7 +14,7 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
 
     // 模拟运行时间
     const [uptime, setUptime] = useState('00:00:00');
-    const [todaySignals, setTodaySignals] = useState(142);
+    const { signals } = useSignals();
 
     useEffect(() => {
         if (isRunning) {
@@ -106,10 +106,10 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
                                 <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>运行时间</div>
                                 <div style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'monospace' }}>{uptime}</div>
                             </div>
-                            {/* 今日信号 */}
+                            {/* 实时信号 */}
                             <div style={{ textAlign: 'center', padding: '8px', background: 'rgba(0,0,0,0.02)', borderRadius: '6px' }}>
-                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>今日信号</div>
-                                <div style={{ fontSize: '14px', fontWeight: 700 }}>{todaySignals}</div>
+                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>实时信号</div>
+                                <div style={{ fontSize: '14px', fontWeight: 700 }}>{(signals || []).length}</div>
                             </div>
                         </div>
                     </div>

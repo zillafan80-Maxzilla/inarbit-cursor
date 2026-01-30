@@ -1,718 +1,601 @@
-"""
-统一配置服务
-提供交易所、币种、全局设置的统一访问接口
-确保所有模块使用相同的数据源，避免配置不一致导致系统崩溃
-"""
 import json
 import logging
-from typing import List, Dict, Optional
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import UUID
+from typing import Any, Optional, Iterable
+from uuid import UUID, uuid4
 
 from ..db import get_pg_pool, get_redis
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================
-# 数据模型
-# ============================================
-
-@dataclass
-class ExchangeConfig:
-    """交易所配置"""
-    id: str
-    name: str
-    icon: str
-    bg_color: str
-    border_color: str
-    is_connected: bool = False
-    is_spot_enabled: bool = True
-    is_futures_enabled: bool = False
-    
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'name': self.name,
-            'icon': self.icon,
-            'bgColor': self.bg_color,
-            'borderColor': self.border_color,
-            'isConnected': self.is_connected,
-            'isSpotEnabled': self.is_spot_enabled,
-            'isFuturesEnabled': self.is_futures_enabled
-        }
+STRATEGY_TYPES = {"graph", "grid", "pair"}
 
 
 @dataclass
 class TradingPair:
-    """交易对配置"""
     symbol: str
     base: str
     quote: str
     is_active: bool = True
-    supported_exchanges: List[str] = None
-    
+    supported_exchanges: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
-            'symbol': self.symbol,
-            'base': self.base,
-            'quote': self.quote,
-            'isActive': self.is_active,
-            'supportedExchanges': self.supported_exchanges or []
+            "symbol": self.symbol,
+            "base_currency": self.base,
+            "quote_currency": self.quote,
+            "is_active": self.is_active,
+            "supported_exchanges": list(self.supported_exchanges or []),
+        }
+
+
+@dataclass
+class ExchangeConfig:
+    id: Optional[str]
+    exchange_id: str
+    display_name: Optional[str] = None
+    is_active: bool = True
+    deleted_at: Optional[Any] = None
+    created_at: Optional[Any] = None
+    updated_at: Optional[Any] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id) if self.id else None,
+            "exchange_id": self.exchange_id,
+            "display_name": self.display_name,
+            "is_active": bool(self.is_active),
+            "deleted_at": self.deleted_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
 @dataclass
 class OpportunityConfig:
-    """机会配置"""
     strategy_type: str
     config: dict
-    version: int
-    updated_at: Optional[datetime] = None
+    version: int = 1
+    updated_at: Optional[Any] = None
 
     def to_dict(self) -> dict:
         return {
             "strategyType": self.strategy_type,
+            "strategy_type": self.strategy_type,
             "config": self.config,
-            "version": self.version,
-            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
+            "version": int(self.version or 1),
+            "updated_at": self.updated_at,
         }
 
 
-# ============================================
-# 默认配置（用于初始化）
-# ============================================
-
-DEFAULT_EXCHANGES = [
-    ExchangeConfig('binance', 'Binance', '🟡', 'rgba(181, 137, 0, 0.12)', '#b58900'),
-    ExchangeConfig('okx', 'OKX', '⚪', 'rgba(131, 148, 150, 0.12)', '#839496'),
-    ExchangeConfig('bybit', 'Bybit', '🟠', 'rgba(203, 75, 22, 0.10)', '#cb4b16'),
-    ExchangeConfig('gate', 'Gate.io', '🔵', 'rgba(38, 139, 210, 0.10)', '#268bd2'),
-    ExchangeConfig('bitget', 'Bitget', '🟢', 'rgba(133, 153, 0, 0.10)', '#859900'),
-]
-
 DEFAULT_PAIRS = [
-    TradingPair('BTC/USDT', 'BTC', 'USDT', True, ['binance', 'okx', 'bybit', 'gate']),
-    TradingPair('ETH/USDT', 'ETH', 'USDT', True, ['binance', 'okx', 'bybit', 'gate']),
-    TradingPair('BNB/USDT', 'BNB', 'USDT', True, ['binance']),
-    TradingPair('SOL/USDT', 'SOL', 'USDT', True, ['binance', 'okx', 'bybit']),
-    TradingPair('XRP/USDT', 'XRP', 'USDT', True, ['binance', 'okx', 'bybit', 'gate']),
-    TradingPair('DOGE/USDT', 'DOGE', 'USDT', True, ['binance', 'okx']),
-    TradingPair('BEAM/USDT', 'BEAM', 'USDT', True, ['binance']),
-    TradingPair('BSW/USDT', 'BSW', 'USDT', True, ['binance']),
-    TradingPair('ANC/USDT', 'ANC', 'USDT', True, ['binance']),
-    TradingPair('AGIX/USDT', 'AGIX', 'USDT', True, ['binance']),
-    TradingPair('BLZ/USDT', 'BLZ', 'USDT', True, ['binance']),
+    TradingPair(symbol="BTC/USDT", base="BTC", quote="USDT", supported_exchanges=["binance"]),
+    TradingPair(symbol="ETH/USDT", base="ETH", quote="USDT", supported_exchanges=["binance"]),
+    TradingPair(symbol="BNB/USDT", base="BNB", quote="USDT", supported_exchanges=["binance"]),
+    TradingPair(symbol="SOL/USDT", base="SOL", quote="USDT", supported_exchanges=["binance"]),
+    TradingPair(symbol="XRP/USDT", base="XRP", quote="USDT", supported_exchanges=["binance"]),
 ]
 
+DEFAULT_OPPORTUNITY_CONFIGS = {
+    "graph": {"min_profit_rate": 0.002, "max_path_length": 5},
+    "grid": {"grids": []},
+    "pair": {
+        "pair_a": "BTC/USDT",
+        "pair_b": "ETH/USDT",
+        "entry_z_score": 2.0,
+        "exit_z_score": 0.5,
+        "lookback_period": 100,
+    },
+}
 
-# ============================================
-# 配置服务类
-# ============================================
 
 class ConfigService:
-    """
-    统一配置服务 - 单例模式
-    确保所有模块使用相同的配置数据
-    """
-    
-    _instance: Optional['ConfigService'] = None
-    CACHE_TTL = 300  # 缓存5分钟
-    
     def __init__(self):
-        self._exchanges_cache: Dict[str, ExchangeConfig] = {}
-        self._pairs_cache: Dict[str, TradingPair] = {}
-        self._opportunity_cache: Dict[str, Dict[str, OpportunityConfig]] = {}
-        self._cache_time: Optional[datetime] = None
-    
-    @classmethod
-    def get_instance(cls) -> 'ConfigService':
-        """获取单例实例"""
-        if cls._instance is None:
-            cls._instance = ConfigService()
-        return cls._instance
-    
-    async def initialize(self):
-        """初始化配置服务，从数据库加载配置"""
-        logger.info("正在初始化配置服务...")
-        await self._load_from_database()
-        logger.info("配置服务初始化完成")
-    
-    async def _load_from_database(self):
-        """从数据库加载配置"""
+        self._cache: dict[str, tuple[float, Any]] = {}
         try:
-            pool = await get_pg_pool()
-            
-            # 加载交易所配置
-            async with pool.acquire() as conn:
-                # 检查exchange_status表是否存在
-                exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'exchange_status'
-                    )
-                """)
-                
-                if exists:
-                    rows = await conn.fetch("SELECT * FROM exchange_status")
-                    if not rows:
-                        logger.info("exchange_status表为空，使用默认配置")
-                        for ex in DEFAULT_EXCHANGES:
-                            self._exchanges_cache[ex.id] = ex
-                    else:
-                        for row in rows:
-                            self._exchanges_cache[row['exchange_id']] = ExchangeConfig(
-                                id=row['exchange_id'],
-                                name=row['display_name'],
-                                icon=row['icon'],
-                                bg_color=row['bg_color'] if 'bg_color' in row and row['bg_color'] else 'rgba(0,0,0,0.1)',
-                                border_color=row['border_color'] if 'border_color' in row and row['border_color'] else '#666',
-                                is_connected=row['is_connected'] if 'is_connected' in row and row['is_connected'] is not None else False
-                            )
-                else:
-                    # 使用默认配置
-                    logger.info("exchange_status表不存在，使用默认配置")
-                    for ex in DEFAULT_EXCHANGES:
-                        self._exchanges_cache[ex.id] = ex
-                
-                # 检查trading_pairs表是否存在
-                exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'trading_pairs'
-                    )
-                """)
-                
-                if exists:
-                    rows = await conn.fetch("SELECT * FROM trading_pairs WHERE is_active = true")
-                    if not rows:
-                        logger.info("trading_pairs表为空，使用默认配置")
-                        for pair in DEFAULT_PAIRS:
-                            self._pairs_cache[pair.symbol] = pair
-                    else:
-                        for row in rows:
-                            self._pairs_cache[row['symbol']] = TradingPair(
-                                symbol=row['symbol'],
-                                base=row['base_currency'],
-                                quote=row['quote_currency'],
-                                is_active=row['is_active'],
-                                supported_exchanges=row['supported_exchanges'] if 'supported_exchanges' in row and row['supported_exchanges'] else []
-                            )
-                else:
-                    # 使用默认配置
-                    logger.info("trading_pairs表不存在，使用默认配置")
-                    for pair in DEFAULT_PAIRS:
-                        self._pairs_cache[pair.symbol] = pair
-            
-            self._cache_time = datetime.now()
-            logger.info(f"已加载 {len(self._exchanges_cache)} 个交易所, {len(self._pairs_cache)} 个交易对")
-            
-        except Exception as e:
-            logger.warning(f"从数据库加载配置失败，使用默认配置: {e}")
-            # 使用默认配置
-            for ex in DEFAULT_EXCHANGES:
-                self._exchanges_cache[ex.id] = ex
-            for pair in DEFAULT_PAIRS:
-                self._pairs_cache[pair.symbol] = pair
-
-    async def _load_opportunity_configs(self, user_id: UUID):
-        """从数据库加载机会配置并同步到 Redis"""
-        pool = await get_pg_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT strategy_type, config, version, updated_at
-                FROM opportunity_configs
-                WHERE user_id = $1 AND is_active = true
-                """,
-                user_id,
-            )
-
-        configs: Dict[str, OpportunityConfig] = {}
-        for row in rows or []:
-            config_value = row["config"] or {}
-            if isinstance(config_value, str):
-                try:
-                    config_value = json.loads(config_value)
-                except Exception:
-                    config_value = {}
-            configs[str(row["strategy_type"])] = OpportunityConfig(
-                strategy_type=str(row["strategy_type"]),
-                config=config_value,
-                version=int(row["version"] or 1),
-                updated_at=row.get("updated_at"),
-            )
-
-        self._opportunity_cache[str(user_id)] = configs
-        await self._sync_opportunity_configs_to_redis(user_id, configs)
-
-    async def _sync_opportunity_configs_to_redis(self, user_id: UUID, configs: Dict[str, OpportunityConfig]):
-        redis = await get_redis()
-        for strategy_type, cfg in configs.items():
-            key = f"config:opportunity:{user_id}:{strategy_type}"
-            await redis.set(key, json.dumps(cfg.to_dict(), ensure_ascii=False))
-        await self._publish_opportunity_config_update(user_id, list(configs.keys()))
-
-    async def _publish_opportunity_config_update(self, user_id: UUID, strategy_types: list[str]) -> None:
-        if not strategy_types:
-            return
-        redis = await get_redis()
-        payload = json.dumps(
-            {
-                "user_id": str(user_id),
-                "strategy_types": strategy_types,
-                "updated_at": datetime.now().isoformat(),
-            },
-            ensure_ascii=False,
-        )
-        await redis.publish("config:opportunity:updated", payload)
+            self._cache_ttl_seconds = float(os.getenv("CONFIG_CACHE_TTL_SECONDS", "30").strip() or "30")
+        except Exception:
+            self._cache_ttl_seconds = 30.0
 
     def _validate_strategy_type(self, strategy_type: str) -> str:
-        allowed = {"graph", "grid", "pair"}
-        normalized = (strategy_type or "").strip().lower()
-        if normalized not in allowed:
+        if not strategy_type:
+            raise ValueError("strategy_type is required")
+        st = str(strategy_type).strip().lower()
+        if st not in STRATEGY_TYPES:
             raise ValueError(f"unsupported strategy_type: {strategy_type}")
-        return normalized
+        return st
 
     def _validate_opportunity_config(self, strategy_type: str, config: dict) -> None:
+        st = self._validate_strategy_type(strategy_type)
         if not isinstance(config, dict):
-            raise ValueError("config must be an object")
+            raise ValueError("config must be a dict")
 
-        if strategy_type == "graph":
-            min_profit_rate = config.get("min_profit_rate")
-            if min_profit_rate is not None:
-                try:
-                    if float(min_profit_rate) < 0:
-                        raise ValueError("min_profit_rate must be >= 0")
-                except Exception:
-                    raise ValueError("min_profit_rate must be a number")
-            max_path_length = config.get("max_path_length")
-            if max_path_length is not None:
-                try:
-                    if int(max_path_length) < 2:
-                        raise ValueError("max_path_length must be >= 2")
-                except Exception:
-                    raise ValueError("max_path_length must be an integer")
+        def _is_number(value: Any) -> bool:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-        if strategy_type == "grid":
+        if st == "graph":
+            min_profit_rate = config.get("min_profit_rate", 0.0)
+            if not _is_number(min_profit_rate):
+                raise ValueError("min_profit_rate must be a number")
+            max_path_length = config.get("max_path_length", 3)
+            if not isinstance(max_path_length, int) or max_path_length < 2:
+                raise ValueError("max_path_length must be >= 2")
+
+        if st == "grid":
             grids = config.get("grids")
-            if grids is not None:
-                if not isinstance(grids, list):
-                    raise ValueError("grids must be a list")
-                for idx, grid in enumerate(grids):
-                    if not isinstance(grid, dict):
-                        raise ValueError(f"grids[{idx}] must be an object")
-                    symbol = grid.get("symbol")
-                    if symbol is not None and not isinstance(symbol, str):
-                        raise ValueError(f"grids[{idx}].symbol must be a string")
-                    try:
-                        upper = grid.get("upper_price")
-                        lower = grid.get("lower_price")
-                        if upper is not None and lower is not None:
-                            if float(upper) <= float(lower):
-                                raise ValueError(f"grids[{idx}] upper_price must be > lower_price")
-                    except Exception:
-                        raise ValueError(f"grids[{idx}] price values must be numbers")
-                    grid_count = grid.get("grid_count")
-                    if grid_count is not None:
-                        try:
-                            if int(grid_count) <= 0:
-                                raise ValueError(f"grids[{idx}].grid_count must be > 0")
-                        except Exception:
-                            raise ValueError(f"grids[{idx}].grid_count must be an integer")
+            if grids is None:
+                grids = []
+            if not isinstance(grids, list):
+                raise ValueError("grids must be a list")
+            for g in grids:
+                if not isinstance(g, dict):
+                    raise ValueError("grid item must be a dict")
+                if not isinstance(g.get("symbol"), str):
+                    raise ValueError("grid.symbol is required")
+                if not _is_number(g.get("upper_price")):
+                    raise ValueError("grid.upper_price must be a number")
+                if not _is_number(g.get("lower_price")):
+                    raise ValueError("grid.lower_price must be a number")
+                if not isinstance(g.get("grid_count"), int) or g.get("grid_count") < 2:
+                    raise ValueError("grid.grid_count must be >= 2")
 
-        if strategy_type == "pair":
-            pair_a = config.get("pair_a")
-            pair_b = config.get("pair_b")
-            if pair_a is not None and not isinstance(pair_a, str):
-                raise ValueError("pair_a must be a string")
-            if pair_b is not None and not isinstance(pair_b, str):
-                raise ValueError("pair_b must be a string")
-            entry_z = config.get("entry_z_score")
-            exit_z = config.get("exit_z_score")
-            if entry_z is not None:
-                try:
-                    float(entry_z)
-                except Exception:
-                    raise ValueError("entry_z_score must be a number")
-            if exit_z is not None:
-                try:
-                    float(exit_z)
-                except Exception:
-                    raise ValueError("exit_z_score must be a number")
-            lookback = config.get("lookback_period")
-            if lookback is not None:
-                try:
-                    if int(lookback) <= 0:
-                        raise ValueError("lookback_period must be > 0")
-                except Exception:
-                    raise ValueError("lookback_period must be an integer")
-    
-    # ============================================
-    # 交易所配置接口
-    # ============================================
+        if st == "pair":
+            if not isinstance(config.get("pair_a"), str):
+                raise ValueError("pair_a is required")
+            if not isinstance(config.get("pair_b"), str):
+                raise ValueError("pair_b is required")
+            entry_z = config.get("entry_z_score", 2.0)
+            exit_z = config.get("exit_z_score", 0.5)
+            if not _is_number(entry_z) or not _is_number(exit_z):
+                raise ValueError("entry_z_score/exit_z_score must be numbers")
+            lookback = config.get("lookback_period", 100)
+            if not isinstance(lookback, int) or lookback < 2:
+                raise ValueError("lookback_period must be >= 2")
 
-    async def _get_user_connected_exchange_ids(self, user_id: UUID) -> set[str]:
-        pool = await get_pg_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
+    async def refresh_cache(self) -> None:
+        self._cache.clear()
+
+    async def _table_exists(self, conn, table_name: str) -> bool:
+        return bool(
+            await conn.fetchval(
                 """
-                SELECT exchange_id
-                FROM exchange_configs
-                WHERE user_id = $1 AND is_active = true
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
                 """,
-                user_id,
+                table_name,
             )
-        return {r["exchange_id"] for r in rows}
-    
-    async def get_all_exchanges(self, user_id: Optional[UUID] = None) -> List[ExchangeConfig]:
-        """获取所有交易所配置"""
-        if not self._exchanges_cache or not self.is_cache_valid():
-            await self._load_from_database()
-
-        exchanges = list(self._exchanges_cache.values())
-        if not user_id:
-            return exchanges
-
-        connected_ids = await self._get_user_connected_exchange_ids(user_id)
-        return [
-            ExchangeConfig(
-                id=ex.id,
-                name=ex.name,
-                icon=ex.icon,
-                bg_color=ex.bg_color,
-                border_color=ex.border_color,
-                is_connected=ex.id in connected_ids,
-                is_spot_enabled=ex.is_spot_enabled,
-                is_futures_enabled=ex.is_futures_enabled,
-            )
-            for ex in exchanges
-        ]
-    
-    async def get_exchange(self, exchange_id: str, user_id: Optional[UUID] = None) -> Optional[ExchangeConfig]:
-        """获取指定交易所配置"""
-        if not self._exchanges_cache or not self.is_cache_valid():
-            await self._load_from_database()
-
-        ex = self._exchanges_cache.get(exchange_id)
-        if not ex:
-            return None
-        if not user_id:
-            return ex
-
-        connected_ids = await self._get_user_connected_exchange_ids(user_id)
-        return ExchangeConfig(
-            id=ex.id,
-            name=ex.name,
-            icon=ex.icon,
-            bg_color=ex.bg_color,
-            border_color=ex.border_color,
-            is_connected=ex.id in connected_ids,
-            is_spot_enabled=ex.is_spot_enabled,
-            is_futures_enabled=ex.is_futures_enabled,
         )
-    
-    async def get_connected_exchanges(self, user_id: Optional[UUID] = None) -> List[ExchangeConfig]:
-        """获取已连接的交易所"""
-        all_exchanges = await self.get_all_exchanges(user_id=user_id)
-        return [ex for ex in all_exchanges if ex.is_connected]
-    
-    async def set_exchange_connected(self, exchange_id: str, connected: bool):
-        """设置交易所连接状态"""
-        if exchange_id in self._exchanges_cache:
-            self._exchanges_cache[exchange_id].is_connected = connected
-            
-            return
-    
-    # ============================================
-    # 交易对配置接口
-    # ============================================
 
-    async def _get_exchange_config_id(self, user_id: UUID, exchange_id: str) -> Optional[UUID]:
+    def _cache_get(self, key: str) -> Optional[Any]:
+        item = self._cache.get(key)
+        if not item:
+            return None
+        ts, value = item
+        if (datetime.utcnow().timestamp() - ts) > self._cache_ttl_seconds:
+            self._cache.pop(key, None)
+            return None
+        return value
+
+    def _cache_set(self, key: str, value: Any) -> None:
+        self._cache[key] = (datetime.utcnow().timestamp(), value)
+
+    async def get_all_exchanges(self, *, user_id: Optional[UUID] = None) -> list[ExchangeConfig]:
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
-            return await conn.fetchval(
-                """
-                SELECT id
-                FROM exchange_configs
-                WHERE user_id = $1 AND exchange_id = $2 AND is_active = true
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                user_id,
-                exchange_id,
+            if not await self._table_exists(conn, "exchange_configs"):
+                return []
+            if user_id:
+                rows = await conn.fetch("SELECT * FROM exchange_configs WHERE user_id = $1", user_id)
+            else:
+                rows = await conn.fetch("SELECT * FROM exchange_configs")
+        result: list[ExchangeConfig] = []
+        for row in rows or []:
+            data = dict(row)
+            result.append(
+                ExchangeConfig(
+                    id=data.get("id"),
+                    exchange_id=data.get("exchange_id") or data.get("exchange"),
+                    display_name=data.get("display_name"),
+                    is_active=bool(data.get("is_active", True)),
+                    deleted_at=data.get("deleted_at"),
+                    created_at=data.get("created_at"),
+                    updated_at=data.get("updated_at"),
+                )
             )
+        return result
 
-    async def _get_pairs_for_exchange_user(self, user_id: UUID, exchange_id: str, enabled_only: bool = False) -> List[TradingPair]:
-        exchange_config_id = await self._get_exchange_config_id(user_id, exchange_id)
-        if not exchange_config_id:
-            return []
+    async def get_connected_exchanges(self, *, user_id: Optional[UUID] = None) -> list[ExchangeConfig]:
+        exchanges = await self.get_all_exchanges(user_id=user_id)
+        out = []
+        for ex in exchanges:
+            if not ex.is_active:
+                continue
+            if ex.deleted_at:
+                continue
+            out.append(ex)
+        return out
 
+    async def get_exchange(self, exchange_id: str, *, user_id: Optional[UUID] = None) -> Optional[ExchangeConfig]:
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
-            query = """
-                SELECT tp.symbol, tp.base_currency, tp.quote_currency, tp.is_active, tp.supported_exchanges
-                FROM exchange_trading_pairs etp
-                JOIN trading_pairs tp ON tp.id = etp.trading_pair_id
-                WHERE etp.exchange_config_id = $1
-            """
-            if enabled_only:
-                query += " AND etp.is_enabled = true"
+            if not await self._table_exists(conn, "exchange_configs"):
+                return None
+            params = [exchange_id]
+            where = "exchange_id = $1"
+            try:
+                uid = UUID(exchange_id)
+                where = "id = $1"
+                params = [uid]
+            except Exception:
+                pass
+            if user_id:
+                params.append(user_id)
+                where = f"{where} AND user_id = ${len(params)}"
+            row = await conn.fetchrow(f"SELECT * FROM exchange_configs WHERE {where} LIMIT 1", *params)
+        if not row:
+            return None
+        data = dict(row)
+        return ExchangeConfig(
+            id=data.get("id"),
+            exchange_id=data.get("exchange_id") or data.get("exchange"),
+            display_name=data.get("display_name"),
+            is_active=bool(data.get("is_active", True)),
+            deleted_at=data.get("deleted_at"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+        )
 
-            rows = await conn.fetch(query, exchange_config_id)
+    async def get_all_pairs(self) -> list[TradingPair]:
+        cache_key = "pairs:all"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
-        return [
-            TradingPair(
-                symbol=r["symbol"],
-                base=r["base_currency"],
-                quote=r["quote_currency"],
-                is_active=r["is_active"],
-                supported_exchanges=r["supported_exchanges"] or [],
-            )
-            for r in rows
-        ]
-    
-    async def get_all_pairs(self) -> List[TradingPair]:
-        """获取所有交易对"""
-        if not self._pairs_cache or not self.is_cache_valid():
-            await self._load_from_database()
-        return list(self._pairs_cache.values())
-    
-    async def get_pair(self, symbol: str) -> Optional[TradingPair]:
-        """获取指定交易对"""
-        if not self._pairs_cache or not self.is_cache_valid():
-            await self._load_from_database()
-        return self._pairs_cache.get(symbol)
-    
+        pool = await get_pg_pool()
+        pairs: list[TradingPair] = []
+        async with pool.acquire() as conn:
+            if await self._table_exists(conn, "trading_pairs"):
+                rows = await conn.fetch("SELECT * FROM trading_pairs WHERE is_active = true")
+                for row in rows or []:
+                    data = dict(row)
+                    pairs.append(
+                        TradingPair(
+                            symbol=data.get("symbol"),
+                            base=data.get("base_currency") or data.get("base"),
+                            quote=data.get("quote_currency") or data.get("quote"),
+                            is_active=bool(data.get("is_active", True)),
+                            supported_exchanges=data.get("supported_exchanges") or [],
+                        )
+                    )
+
+        if not pairs:
+            pairs = list(DEFAULT_PAIRS)
+        self._cache_set(cache_key, pairs)
+        return pairs
+
     async def get_pairs_for_exchange(
         self,
         exchange_id: str,
+        *,
         user_id: Optional[UUID] = None,
         enabled_only: bool = False,
-    ) -> List[TradingPair]:
-        """获取指定交易所支持的交易对"""
-        if user_id:
-            return await self._get_pairs_for_exchange_user(user_id, exchange_id, enabled_only=enabled_only)
+    ) -> list[TradingPair]:
+        cache_key = f"pairs:exchange:{exchange_id}:{user_id}:{enabled_only}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
-        all_pairs = await self.get_all_pairs()
-        # supported_exchanges 为空时表示“所有交易所均可用”
-        return [p for p in all_pairs if (not (p.supported_exchanges or [])) or exchange_id in (p.supported_exchanges or [])]
-    
-    async def get_base_currencies(self) -> List[str]:
-        """获取所有基础货币列表"""
-        all_pairs = await self.get_all_pairs()
-        return list(set(p.base for p in all_pairs))
-
-    # ============================================
-    # 机会配置接口
-    # ============================================
-
-    async def get_opportunity_config(self, strategy_type: str, user_id: UUID) -> OpportunityConfig:
-        normalized = self._validate_strategy_type(strategy_type)
-        user_key = str(user_id)
-        if user_key not in self._opportunity_cache:
-            await self._load_opportunity_configs(user_id)
-
-        cache = self._opportunity_cache.get(user_key) or {}
-        if normalized in cache:
-            return cache[normalized]
-
-        return OpportunityConfig(strategy_type=normalized, config={}, version=1, updated_at=None)
-
-    async def get_all_opportunity_configs(self, user_id: UUID) -> List[OpportunityConfig]:
-        user_key = str(user_id)
-        if user_key not in self._opportunity_cache:
-            await self._load_opportunity_configs(user_id)
-        return list((self._opportunity_cache.get(user_key) or {}).values())
-
-    async def update_opportunity_config(self, strategy_type: str, config: dict, user_id: UUID) -> OpportunityConfig:
-        normalized = self._validate_strategy_type(strategy_type)
-        self._validate_opportunity_config(normalized, config or {})
         pool = await get_pg_pool()
+        pairs: list[TradingPair] = []
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO opportunity_configs (user_id, strategy_type, config, version, is_active, updated_at)
-                VALUES ($1, $2::strategy_type, $3::jsonb, 1, true, NOW())
-                ON CONFLICT (user_id, strategy_type) DO UPDATE SET
-                    config = EXCLUDED.config,
-                    version = opportunity_configs.version + 1,
-                    is_active = true,
-                    updated_at = NOW()
-                RETURNING strategy_type, config, version, updated_at
-                """,
-                user_id,
-                normalized,
-                json.dumps(config, ensure_ascii=False),
-            )
-
-        if not row:
-            raise RuntimeError("failed to update opportunity config")
-
-        config_value = row["config"] or {}
-        if isinstance(config_value, str):
-            try:
-                config_value = json.loads(config_value)
-            except Exception:
-                config_value = {}
-
-        updated = OpportunityConfig(
-            strategy_type=str(row["strategy_type"]),
-            config=config_value,
-            version=int(row["version"] or 1),
-            updated_at=row.get("updated_at"),
-        )
-
-        try:
-            async with pool.acquire() as history_conn:
-                await history_conn.execute(
-                    """
-                    INSERT INTO opportunity_config_history (user_id, strategy_type, version, config)
-                    VALUES ($1, $2::strategy_type, $3, $4::jsonb)
+            has_trading_pairs = await self._table_exists(conn, "trading_pairs")
+            has_exchange_configs = await self._table_exists(conn, "exchange_configs")
+            has_exchange_pairs = await self._table_exists(conn, "exchange_trading_pairs")
+            if has_trading_pairs and has_exchange_configs and has_exchange_pairs:
+                params: list[Any] = []
+                where_clause = []
+                try:
+                    exchange_uuid = UUID(exchange_id)
+                    where_clause.append("ec.id = $1")
+                    params.append(exchange_uuid)
+                except Exception:
+                    where_clause.append("ec.exchange_id = $1")
+                    params.append(exchange_id)
+                if user_id:
+                    where_clause.append(f"ec.user_id = ${len(params) + 1}")
+                    params.append(user_id)
+                if enabled_only:
+                    where_clause.append("etp.is_enabled = true")
+                where_clause.append("tp.is_active = true")
+                where_sql = " AND ".join(where_clause)
+                rows = await conn.fetch(
+                    f"""
+                    SELECT tp.symbol, tp.base_currency, tp.quote_currency, tp.is_active, tp.supported_exchanges
+                    FROM exchange_trading_pairs etp
+                    JOIN trading_pairs tp ON tp.id = etp.trading_pair_id
+                    JOIN exchange_configs ec ON ec.id = etp.exchange_config_id
+                    WHERE {where_sql}
                     """,
-                    user_id,
-                    normalized,
-                    updated.version,
-                    json.dumps(updated.config, ensure_ascii=False),
+                    *params,
                 )
+                for row in rows or []:
+                    data = dict(row)
+                    pairs.append(
+                        TradingPair(
+                            symbol=data.get("symbol"),
+                            base=data.get("base_currency") or data.get("base"),
+                            quote=data.get("quote_currency") or data.get("quote"),
+                            is_active=bool(data.get("is_active", True)),
+                            supported_exchanges=data.get("supported_exchanges") or [],
+                        )
+                    )
+
+        if not pairs:
+            fallback = []
+            for p in DEFAULT_PAIRS:
+                if p.supported_exchanges and exchange_id not in p.supported_exchanges:
+                    continue
+                if enabled_only and not p.is_active:
+                    continue
+                fallback.append(p)
+            pairs = fallback
+
+        self._cache_set(cache_key, pairs)
+        return pairs
+
+    async def get_pair(self, symbol: str) -> Optional[TradingPair]:
+        symbol = symbol.strip()
+        if not symbol:
+            return None
+        pairs = await self.get_all_pairs()
+        for p in pairs:
+            if p.symbol == symbol:
+                return p
+        return None
+
+    async def get_base_currencies(self) -> list[str]:
+        pairs = await self.get_all_pairs()
+        bases = {p.base for p in pairs if p.base}
+        return sorted(bases)
+
+    async def _load_opportunity_from_redis(self, user_id: UUID, strategy_type: str) -> OpportunityConfig:
+        redis = await get_redis()
+        key = f"config:opportunity:{user_id}:{strategy_type}"
+        raw = await redis.get(key)
+        if raw:
+            try:
+                payload = json.loads(raw)
+                return OpportunityConfig(
+                    strategy_type=strategy_type,
+                    config=payload.get("config") or {},
+                    version=int(payload.get("version") or 1),
+                    updated_at=payload.get("updated_at"),
+                )
+            except Exception:
+                pass
+        default_cfg = DEFAULT_OPPORTUNITY_CONFIGS.get(strategy_type, {})
+        return OpportunityConfig(strategy_type=strategy_type, config=default_cfg, version=1)
+
+    async def get_opportunity_config(self, *, strategy_type: str, user_id: UUID) -> OpportunityConfig:
+        st = self._validate_strategy_type(strategy_type)
+        return await self._load_opportunity_from_redis(user_id, st)
+
+    async def get_all_opportunity_configs(self, *, user_id: UUID) -> list[OpportunityConfig]:
+        result = []
+        for st in STRATEGY_TYPES:
+            result.append(await self.get_opportunity_config(strategy_type=st, user_id=user_id))
+        return result
+
+    async def _record_history(self, user_id: UUID, strategy_type: str, version: int, config: dict) -> None:
+        redis = await get_redis()
+        history_key = f"config:opportunity:history:{user_id}:{strategy_type}"
+        record = {
+            "version": version,
+            "config": config,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        try:
+            pipe = redis.pipeline()
+            pipe.lpush(history_key, json.dumps(record, ensure_ascii=False))
+            pipe.ltrim(history_key, 0, 200)
+            await pipe.execute()
         except Exception:
             pass
 
-        user_key = str(user_id)
-        if user_key not in self._opportunity_cache:
-            self._opportunity_cache[user_key] = {}
-        self._opportunity_cache[user_key][normalized] = updated
-        await self._sync_opportunity_configs_to_redis(user_id, {normalized: updated})
-        return updated
-
-    async def list_opportunity_config_history(self, strategy_type: str, user_id: UUID, limit: int = 20) -> list[dict]:
-        normalized = self._validate_strategy_type(strategy_type)
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, strategy_type, version, config, created_at
-                FROM opportunity_config_history
-                WHERE user_id = $1 AND strategy_type = $2::strategy_type
-                ORDER BY created_at DESC
-                LIMIT $3
-                """,
-                user_id,
-                normalized,
-                limit,
-            )
-        out = []
-        for r in rows or []:
-            item = dict(r)
-            cfg = item.get("config") or {}
-            if isinstance(cfg, str):
-                try:
-                    cfg = json.loads(cfg)
-                except Exception:
-                    cfg = {}
-            item["config"] = cfg
-            out.append(item)
-        return out
-
-    async def rollback_opportunity_config(self, strategy_type: str, version: int, user_id: UUID) -> OpportunityConfig:
-        normalized = self._validate_strategy_type(strategy_type)
-        pool = await get_pg_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT config
-                FROM opportunity_config_history
-                WHERE user_id = $1 AND strategy_type = $2::strategy_type AND version = $3
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                user_id,
-                normalized,
-                int(version),
-            )
-        if not row:
-            raise ValueError("history version not found")
-
-        cfg = row.get("config") or {}
-        if isinstance(cfg, str):
-            try:
-                cfg = json.loads(cfg)
-            except Exception:
-                cfg = {}
-        return await self.update_opportunity_config(normalized, cfg, user_id)
-
-    async def list_opportunity_templates(self, strategy_type: Optional[str] = None) -> list[dict]:
-        pool = await get_pg_pool()
-        async with pool.acquire() as conn:
-            if strategy_type:
-                normalized = self._validate_strategy_type(strategy_type)
-                rows = await conn.fetch(
+            if await self._table_exists(conn, "opportunity_config_history"):
+                await conn.execute(
                     """
-                    SELECT id, strategy_type, name, description, config, created_at
-                    FROM opportunity_config_templates
-                    WHERE strategy_type = $1::strategy_type
-                    ORDER BY created_at DESC
+                    INSERT INTO opportunity_config_history (user_id, strategy_type, version, config)
+                    VALUES ($1, $2, $3, $4::jsonb)
                     """,
-                    normalized,
+                    user_id,
+                    strategy_type,
+                    version,
+                    json.dumps(config, ensure_ascii=False),
                 )
-            else:
+
+    async def update_opportunity_config(self, *, strategy_type: str, config: dict, user_id: UUID) -> OpportunityConfig:
+        st = self._validate_strategy_type(strategy_type)
+        self._validate_opportunity_config(st, config)
+
+        current = await self._load_opportunity_from_redis(user_id, st)
+        version = int(current.version or 1) + 1
+
+        redis = await get_redis()
+        key = f"config:opportunity:{user_id}:{st}"
+        payload = {
+            "config": config,
+            "version": version,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        await redis.set(key, json.dumps(payload, ensure_ascii=False))
+        await self._record_history(user_id, st, version, config)
+        return OpportunityConfig(strategy_type=st, config=config, version=version, updated_at=payload["updated_at"])
+
+    async def list_opportunity_config_history(self, *, strategy_type: str, user_id: UUID, limit: int = 20) -> list[dict]:
+        st = self._validate_strategy_type(strategy_type)
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            if await self._table_exists(conn, "opportunity_config_history"):
                 rows = await conn.fetch(
                     """
-                    SELECT id, strategy_type, name, description, config, created_at
-                    FROM opportunity_config_templates
+                    SELECT id, version, config, created_at
+                    FROM opportunity_config_history
+                    WHERE user_id = $1 AND strategy_type = $2
                     ORDER BY created_at DESC
-                    """
+                    LIMIT $3
+                    """,
+                    user_id,
+                    st,
+                    max(1, min(200, limit)),
                 )
-        out = []
-        for r in rows or []:
-            item = dict(r)
-            cfg = item.get("config") or {}
-            if isinstance(cfg, str):
+                return [dict(r) for r in rows]
+
+        redis = await get_redis()
+        history_key = f"config:opportunity:history:{user_id}:{st}"
+        rows = await redis.lrange(history_key, 0, max(0, limit - 1))
+        items = []
+        for raw in rows or []:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="ignore")
+            if isinstance(raw, str):
                 try:
-                    cfg = json.loads(cfg)
+                    items.append(json.loads(raw))
                 except Exception:
-                    cfg = {}
-            item["config"] = cfg
-            out.append(item)
-        return out
+                    items.append({"raw": raw})
+        return items
+
+    async def rollback_opportunity_config(self, *, strategy_type: str, version: int, user_id: UUID) -> OpportunityConfig:
+        st = self._validate_strategy_type(strategy_type)
+        target_cfg = None
+
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            if await self._table_exists(conn, "opportunity_config_history"):
+                row = await conn.fetchrow(
+                    """
+                    SELECT config
+                    FROM opportunity_config_history
+                    WHERE user_id = $1 AND strategy_type = $2 AND version = $3
+                    """,
+                    user_id,
+                    st,
+                    version,
+                )
+                if row:
+                    target_cfg = dict(row).get("config")
+
+        if target_cfg is None:
+            redis = await get_redis()
+            history_key = f"config:opportunity:history:{user_id}:{st}"
+            rows = await redis.lrange(history_key, 0, -1)
+            for raw in rows or []:
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8", errors="ignore")
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    continue
+                if int(payload.get("version") or 0) == int(version):
+                    target_cfg = payload.get("config")
+                    break
+
+        if target_cfg is None:
+            raise ValueError("version not found")
+
+        return await self.update_opportunity_config(strategy_type=st, config=target_cfg, user_id=user_id)
+
+    async def list_opportunity_templates(self, *, strategy_type: Optional[str] = None) -> list[dict]:
+        st = None
+        if strategy_type:
+            st = self._validate_strategy_type(strategy_type)
+
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            if await self._table_exists(conn, "opportunity_config_templates"):
+                if st:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, strategy_type, name, description, config, created_by, created_at
+                        FROM opportunity_config_templates
+                        WHERE strategy_type = $1
+                        ORDER BY created_at DESC
+                        """,
+                        st,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, strategy_type, name, description, config, created_by, created_at
+                        FROM opportunity_config_templates
+                        ORDER BY created_at DESC
+                        """
+                    )
+                return [dict(r) for r in rows]
+
+        redis = await get_redis()
+        key = f"config:opportunity:templates:{st or 'all'}"
+        rows = await redis.lrange(key, 0, -1)
+        items = []
+        for raw in rows or []:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="ignore")
+            try:
+                items.append(json.loads(raw))
+            except Exception:
+                items.append({"raw": raw})
+        if st:
+            items = [i for i in items if str(i.get("strategy_type")) == st]
+        return items
 
     async def create_opportunity_template(
         self,
         *,
         strategy_type: str,
         name: str,
-        description: Optional[str],
+        description: str,
         config: dict,
         user_id: UUID,
     ) -> dict:
-        normalized = self._validate_strategy_type(strategy_type)
-        self._validate_opportunity_config(normalized, config or {})
+        st = self._validate_strategy_type(strategy_type)
+        self._validate_opportunity_config(st, config)
+        if not name:
+            raise ValueError("name is required")
+
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO opportunity_config_templates (strategy_type, name, description, config, created_by)
-                VALUES ($1::strategy_type, $2, $3, $4::jsonb, $5)
-                RETURNING id, strategy_type, name, description, config, created_at
-                """,
-                normalized,
-                name,
-                description,
-                json.dumps(config, ensure_ascii=False),
-                user_id,
-            )
-        if not row:
-            raise RuntimeError("failed to create template")
-        item = dict(row)
-        item_cfg = item.get("config") or {}
-        if isinstance(item_cfg, str):
-            try:
-                item_cfg = json.loads(item_cfg)
-            except Exception:
-                item_cfg = {}
-        item["config"] = item_cfg
-        return item
+            if await self._table_exists(conn, "opportunity_config_templates"):
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO opportunity_config_templates (strategy_type, name, description, config, created_by)
+                    VALUES ($1, $2, $3, $4::jsonb, $5)
+                    RETURNING id, strategy_type, name, description, config, created_by, created_at
+                    """,
+                    st,
+                    name,
+                    description,
+                    json.dumps(config, ensure_ascii=False),
+                    user_id,
+                )
+                return dict(row)
+
+        template = {
+            "id": str(uuid4()),
+            "strategy_type": st,
+            "name": name,
+            "description": description,
+            "config": config,
+            "created_by": str(user_id),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        redis = await get_redis()
+        key = f"config:opportunity:templates:{st}"
+        await redis.lpush(key, json.dumps(template, ensure_ascii=False))
+        return template
 
     async def apply_opportunity_template(
         self,
@@ -721,56 +604,26 @@ class ConfigService:
         strategy_type: str,
         user_id: UUID,
     ) -> OpportunityConfig:
-        normalized = self._validate_strategy_type(strategy_type)
-        pool = await get_pg_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT strategy_type, config
-                FROM opportunity_config_templates
-                WHERE id = $1
-                """,
-                template_id,
-            )
-        if not row:
+        st = self._validate_strategy_type(strategy_type)
+
+        templates = await self.list_opportunity_templates(strategy_type=st)
+        template = None
+        for t in templates:
+            if str(t.get("id")) == str(template_id):
+                template = t
+                break
+        if not template:
             raise ValueError("template not found")
-        if str(row["strategy_type"]) != normalized:
-            raise ValueError("template strategy_type mismatch")
 
-        cfg = row.get("config") or {}
-        if isinstance(cfg, str):
-            try:
-                cfg = json.loads(cfg)
-            except Exception:
-                cfg = {}
-        return await self.update_opportunity_config(normalized, cfg, user_id)
-    
-    # ============================================
-    # 缓存管理
-    # ============================================
-    
-    async def refresh_cache(self):
-        """刷新缓存"""
-        self._exchanges_cache.clear()
-        self._pairs_cache.clear()
-        self._opportunity_cache.clear()
-        await self._load_from_database()
-    
-    def is_cache_valid(self) -> bool:
-        """检查缓存是否有效"""
-        if self._cache_time is None:
-            return False
-        elapsed = (datetime.now() - self._cache_time).total_seconds()
-        return elapsed < self.CACHE_TTL
+        cfg = template.get("config") or {}
+        return await self.update_opportunity_config(strategy_type=st, config=cfg, user_id=user_id)
 
 
-# ============================================
-# 便捷函数
-# ============================================
+_config_service: Optional[ConfigService] = None
+
 
 async def get_config_service() -> ConfigService:
-    """获取配置服务实例"""
-    service = ConfigService.get_instance()
-    if not service._exchanges_cache or not service.is_cache_valid():
-        await service.initialize()
-    return service
+    global _config_service
+    if _config_service is None:
+        _config_service = ConfigService()
+    return _config_service

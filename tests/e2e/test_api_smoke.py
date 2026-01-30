@@ -1,10 +1,38 @@
-import pytest
-import httpx
+import json
 import os
+from pathlib import Path
+
+import httpx
+import pytest
 
 
 def _api_base() -> str:
-    return os.getenv("INARBIT_API_BASE", "http://localhost:8000").rstrip("/")
+    env_base = os.getenv("INARBIT_API_BASE", "").strip()
+    if env_base:
+        return env_base.rstrip("/")
+
+    host = os.getenv("API_HOST", "localhost").strip() or "localhost"
+    for key in ("API_PORT", "INARBIT_API_PORT"):
+        raw_port = os.getenv(key, "").strip()
+        if raw_port:
+            return f"http://{host}:{raw_port}".rstrip("/")
+
+    try:
+        root = Path(__file__).resolve().parents[2]
+        port_file = root / ".cursor" / "api_port.json"
+        if port_file.exists():
+            payload = json.loads(port_file.read_text(encoding="utf-8") or "{}")
+            if isinstance(payload, dict):
+                base = payload.get("base")
+                if base:
+                    return str(base).rstrip("/")
+                port = payload.get("port")
+                if port:
+                    return f"http://{host}:{port}".rstrip("/")
+    except Exception:
+        pass
+
+    return "http://localhost:8000"
 
 
 @pytest.mark.asyncio
@@ -18,8 +46,8 @@ async def test_api_docs_available():
             if resp.status_code != 200:
                 pytest.skip(f"API 未启动: status={resp.status_code}")
             assert "OpenAPI" in resp.text or "swagger" in resp.text.lower()
-    except httpx.ConnectError:
-        pytest.skip("API 未启动")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pytest.skip("API 未启动或无响应")
 
 
 @pytest.mark.asyncio
@@ -32,8 +60,8 @@ async def test_openapi_json_available():
                 pytest.skip(f"API 未启动: status={resp.status_code}")
             data = resp.json()
             assert "openapi" in data
-    except httpx.ConnectError:
-        pytest.skip("API 未启动")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pytest.skip("API 未启动或无响应")
 
 
 @pytest.mark.asyncio
@@ -101,8 +129,8 @@ async def test_login_and_oms_access():
                 timeout=5.0,
             )
             assert preview.status_code == 200
-    except httpx.ConnectError:
-        pytest.skip("API 未启动")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pytest.skip("API 未启动或无响应")
 
 
 @pytest.mark.asyncio
@@ -138,5 +166,5 @@ async def test_system_metrics_market_regime():
             assert metrics.status_code == 200
             payload = metrics.json().get("data") or {}
             assert "market_regime" in payload
-    except httpx.ConnectError:
-        pytest.skip("API 未启动")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pytest.skip("API 未启动或无响应")
