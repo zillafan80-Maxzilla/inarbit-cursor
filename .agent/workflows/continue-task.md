@@ -46,7 +46,7 @@ description: inarbit 高频交易系统重构任务清单
 - [x] 执行计划创建与状态回写
 - [x] 订单/成交/PNL 数据闭环
 - [x] OMS 对账流程与接口健壮性
-- [ ] WS 订单推送字段一致性检查
+- [x] WS 订单推送字段一致性检查
 
 ### 阶段 4: 风控闭环 🔄
 
@@ -267,3 +267,4 @@ cd engine && cargo build --release
 - OMS 计划验证：execute_latest 成功；plan_status=completed；legs=5（plan_id=cc282874-d36b-4873-8b19-e78d6d73ab85）
 - OMS 闭环：orders=5、fills=5；PNL summary keys=avg_profit/total_orders/total_profit/trading_mode/win_rate
 - OMS 对账健壮性：plan reconcile/refresh/cancel 全部 success；order refresh/cancel success（order_id=bfb91d27-c77b-4880-9e88-cd17ee51484b）
+- WS 订单字段：收到 account_type/exchange_id/leg_id/plan_id/order_type/price/quantity/symbol/side 等，detail 字段齐全
