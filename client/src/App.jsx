@@ -24,17 +24,18 @@ import SystemOverview from './pages/SystemOverview'
 import DecisionConsole from './pages/DecisionConsole'
 import ArbitrageMonitor from './pages/ArbitrageMonitor'
 import ConfigCatalog from './pages/ConfigCatalog'
+import AdminHub from './pages/AdminHub'
 
 import OmsConsole from './pages/OmsConsole'
 import OmsConfig from './pages/OmsConfig'
 
-import { getAuthToken } from './api/client'
+import { getAuthToken, configAPI } from './api/client'
 
 import './App.css'
 
 
 // 全局顶部边条
-const GlobalHeader = ({ botStatus }) => (
+const GlobalHeader = ({ botStatus, tradingMode, liveEnabled }) => (
   <header className="global-header">
     <div className="header-logo">
       <div className="logo-icon">📊</div>
@@ -47,6 +48,7 @@ const GlobalHeader = ({ botStatus }) => (
         }}></span>
         <span>{botStatus === 'running' ? '系统运行中' : '系统已停止'}</span>
       </div>
+      <span>{tradingMode === 'live' ? '🔴 实盘' : '🟢 模拟'} · {liveEnabled ? '实盘已启用' : '实盘已禁用'}</span>
       <span>版本 4.0.0 高频核心</span>
     </div>
   </header>
@@ -74,15 +76,15 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   // 菜单配置
   const menuGroups = [
     {
-      title: '运行中心',
+      title: '管理总览',
       items: [
+        { path: '/admin', icon: '🗺️', label: '管理总览' },
         { path: '/', icon: '🎛️', label: '控制面板', showStatus: true },
         { path: '/system', icon: '🧭', label: '系统概览' },
-        { path: '/logs', icon: '📋', label: '运行日志' },
       ]
     },
     {
-      title: '交易执行',
+      title: '执行与调度',
       items: [
         { path: '/oms', icon: '🧩', label: '订单管理控制台' },
         { path: '/oms-config', icon: '🧰', label: '订单管理参数' },
@@ -91,34 +93,30 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       ]
     },
     {
-      title: '数据视图',
+      title: '市场与资产',
       items: [
         { path: '/live-prices', icon: '📈', label: '实时价格' },
         { path: '/pnl', icon: '💰', label: '收益展示' },
-      ]
-    },
-    {
-      title: '资产与模拟',
-      items: [
-        { path: '/sim-config', icon: '⚙️', label: '模拟配置' },
         { path: '/portfolio', icon: '📦', label: '模拟持仓' },
         { path: '/live-assets', icon: '🏦', label: '交易所账户' },
       ]
     },
     {
-      title: '配置管理',
+      title: '交易所与策略',
       items: [
-        { path: '/strategies', icon: '🎯', label: '策略管理' },
         { path: '/exchanges', icon: '🔗', label: '交易所管理' },
         { path: '/exchange-pairs', icon: '🧩', label: '交易对管理' },
+        { path: '/strategies', icon: '🎯', label: '策略管理' },
         { path: '/config-catalog', icon: '🗂️', label: '配置目录' },
-        { path: '/risk', icon: '🛡️', label: '风险监控' },
-        { path: '/settings', icon: '⚙️', label: '全局设置' },
       ]
     },
     {
-      title: '用户管理',
+      title: '风险与权限',
       items: [
+        { path: '/risk', icon: '🛡️', label: '风险监控' },
+        { path: '/settings', icon: '⚙️', label: '全局设置' },
+        { path: '/sim-config', icon: '⚙️', label: '模拟配置' },
+        { path: '/logs', icon: '📋', label: '运行日志' },
         { path: '/user', icon: '👤', label: '账户与密钥' },
       ]
     },
@@ -177,6 +175,8 @@ function App() {
   const [botStatus, setBotStatus] = useState('running');
   const [tradingMode, setTradingMode] = useState('paper');
   const [currentUser, setCurrentUser] = useState(null);
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const authed = !!getAuthToken();
 
   useEffect(() => {
     try {
@@ -187,14 +187,31 @@ function App() {
     }
   }, []);
 
-  const authed = !!getAuthToken();
+  useEffect(() => {
+    if (!getAuthToken()) return;
+    let mounted = true;
+    const loadSettings = async () => {
+      try {
+        const res = await configAPI.getGlobalSettings();
+        if (!mounted) return;
+        const data = res?.data || {};
+        setTradingMode(data.tradingMode || 'paper');
+        setBotStatus(data.botStatus || 'running');
+        setLiveEnabled(!!data.liveEnabled);
+      } catch {
+        // ignore
+      }
+    };
+    loadSettings();
+    return () => { mounted = false; };
+  }, [authed]);
 
 
   return (
     <Router>
       <div className="app-container">
         {/* 顶部灰绿色边条 */}
-        <GlobalHeader botStatus={botStatus} />
+        <GlobalHeader botStatus={botStatus} tradingMode={tradingMode} liveEnabled={liveEnabled} />
 
         {/* 主体区域：侧边栏 + 内容 */}
         <div className="main-wrapper">
@@ -203,6 +220,7 @@ function App() {
           <main className="main-layout">
               <Routes>
                 <Route path="/login" element={<Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/admin" element={authed ? <AdminHub /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 <Route path="/" element={
                   authed ? (
