@@ -26,6 +26,9 @@ engine/check_result*.txt
 *.log
 server/*.log
 
+# 备份
+backups/
+
 # IDE
 .vscode
 .idea

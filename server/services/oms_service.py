@@ -17,6 +17,7 @@ from ..db import get_redis
 from .market_data_repository import MarketDataRepository
 from .config_service import get_config_service
 from .order_service import OrderService, PnLService
+from .notification_service import send_alert_email
 from ..risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -521,6 +522,20 @@ class OmsService:
                 default=str,
             ),
         )
+        try:
+            subject = f"[INARBIT][{level}] {category}"
+            details = {
+                "user_id": user_id,
+                "category": category,
+                "message": message,
+                "payload": payload or {},
+                "level": level,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            body = json.dumps(details, ensure_ascii=False, default=str, indent=2)
+            await send_alert_email(subject=subject, body=body)
+        except Exception:
+            pass
         try:
             key = f"audit:alert:{user_id}"
             payload = json.dumps(
