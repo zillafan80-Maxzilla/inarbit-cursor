@@ -2,7 +2,7 @@
 系统管理 API 路由
 提供系统重置、初始化等管理功能
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 import asyncio
 import json
 import os
@@ -12,6 +12,7 @@ from typing import Optional
 
 from ..db import get_pg_pool, get_redis
 from ..auth import CurrentUser, require_admin, get_current_user
+from ..services.realtime_snapshot import get_realtime_snapshot
 
 router = APIRouter()
 
@@ -321,6 +322,19 @@ async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
         except Exception:
             pass
         return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/realtime")
+async def get_realtime_overview(
+    force: bool = Query(False, description="Force refresh redis cache"),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Realtime overview data stored in Redis."""
+    try:
+        payload = await get_realtime_snapshot(str(user.id), force_refresh=force)
+        return {"success": True, "data": payload}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

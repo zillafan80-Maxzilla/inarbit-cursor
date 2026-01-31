@@ -100,6 +100,13 @@ async def lifespan(app: FastAPI):
         from .services.config_service import get_config_service
         config_service = await get_config_service()
         logger.info("✅ 配置服务初始化完成")
+
+        try:
+            from .services.realtime_snapshot import warm_realtime_cache
+            await warm_realtime_cache()
+            logger.info("✅ Realtime cache initialized")
+        except Exception as e:
+            logger.warning(f"Realtime cache 初始化失败(可忽略但建议修复): {e}")
         
         logger.info("=" * 60)
         logger.info("🎉 Inarbit API Server 启动成功！")

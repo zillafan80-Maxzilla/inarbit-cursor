@@ -3,7 +3,7 @@
  * 灰绿色主题 UI 重构版 v4.0
  */
 import { useState, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 
 // 页面组件
 import ControlPanel from './pages/ControlPanel'
@@ -25,6 +25,7 @@ import DecisionConsole from './pages/DecisionConsole'
 import ArbitrageMonitor from './pages/ArbitrageMonitor'
 import ConfigCatalog from './pages/ConfigCatalog'
 import AdminHub from './pages/AdminHub'
+import RealtimeOverview from './pages/RealtimeOverview'
 
 import OmsConsole from './pages/OmsConsole'
 import OmsConfig from './pages/OmsConfig'
@@ -79,7 +80,8 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       title: '管理总览',
       items: [
         { path: '/admin', icon: '🗺️', label: '管理总览' },
-        { path: '/', icon: '🎛️', label: '控制面板', showStatus: true },
+        { path: '/realtime', icon: '🕒', label: '实时总览', showStatus: true },
+        { path: '/control', icon: '🎛️', label: '控制面板' },
         { path: '/system', icon: '🧭', label: '系统概览' },
       ]
     },
@@ -223,6 +225,14 @@ function App() {
                 <Route path="/admin" element={authed ? <AdminHub /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 <Route path="/" element={
+                  authed ? (
+                    <Navigate to="/realtime" replace />
+                  ) : (
+                    <Login onLogin={(u) => setCurrentUser(u)} />
+                  )
+                } />
+                <Route path="/realtime" element={authed ? <RealtimeOverview /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/control" element={
                   authed ? (
                     <ControlPanel
                       botStatus={botStatus}

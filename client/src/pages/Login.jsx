@@ -20,7 +20,7 @@ const Login = ({ onLogin }) => {
                 setAuthToken(res.token);
                 localStorage.setItem('inarbit_user', JSON.stringify(res.user || {}));
                 onLogin?.(res.user);
-                navigate('/', { replace: true });
+                navigate('/realtime', { replace: true });
             }
         } catch (err) {
             alert(`登录失败: ${err.message}`);

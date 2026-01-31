@@ -286,6 +286,7 @@ export const systemAPI = {
     }),
     status: () => fetchAPI('/system/status', { timeoutMs: 60000 }),
     metrics: () => fetchAPI('/system/metrics', { timeoutMs: 60000 }),
+    realtime: (force = false) => fetchAPI(`/system/realtime${force ? '?force=1' : ''}`, { timeoutMs: 60000 }),
 };
 
 // ============================================
