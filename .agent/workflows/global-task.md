@@ -144,3 +144,26 @@ description: Inarbit 高频交易系统 - 全程任务清单
   - 将 `inarbit.work` 与 `www.inarbit.work` 的 A 记录更新为 `136.109.140.114`
   - 确认 80/443 防火墙放行后重试：
     `certbot --nginx -d inarbit.work -d www.inarbit.work --non-interactive --agree-tos -m admin@inarbit.work --redirect`
+
+### 系统报告（2026-01-31）
+
+**概览**
+- WebUI 新增“实时总览”，作为默认登录主展示页面
+- 新增 API：`GET /api/v1/system/realtime`，数据缓存到 Redis
+- Redis keys：`realtime:{user_id}:summary` / `realtime:{user_id}:profit_curve` / `realtime:{user_id}:trades` / `realtime:{user_id}:meta`
+- 模拟盘设置：`initial_capital=1000`，`trading_mode=paper`，`bot_status=running`
+- 启用策略：`triangular` + `graph`（至少两项套利策略）
+- 远程回归：`python -m pytest -q` → `35 passed, 7 skipped, 1 warning`
+
+**运行提示**
+- 实时总览每 5 秒刷新一次，uptime 使用 Redis 启动时间计算
+- 若某项无配置/无数据，前端显示“无”
+- 已开启模拟盘策略运行，建议持续运行数日观察收益曲线与成交明细
+
+### 未来优化方案（2026-01-31）
+
+- 将实时总览刷新改为后台任务 + WebSocket 推送，减少同步查询压力
+- 收益曲线加入分桶聚合（按分钟/小时），提升长时间运行的渲染性能
+- 交易所/交易对/策略提供一键配置模板与健康检查面板
+- 引入风控参数动态调整与策略级熔断提醒
+- HTTPS 自动续期与 DNS 指向校验脚本化
