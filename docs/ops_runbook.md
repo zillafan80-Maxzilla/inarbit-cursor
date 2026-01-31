@@ -57,7 +57,24 @@ schtasks /create /tn "inarbit-backup" /sc monthly /d 1 /st 02:00 /tr "powershell
 
 备份输出目录为仓库根目录下的 `backups/`，已加入 `.gitignore`。
 
-## 5. 权限隔离方案（本机）
+## 5. 运行性能调优（可选）
+
+以下环境变量可用于降低行情采集压力、减少延迟或提升稳定性：
+
+- `MARKETDATA_MAX_TICKER_SYMBOLS`：spot ticker 拉取数量上限（默认 200）
+- `MARKETDATA_MAX_ORDERBOOK_SYMBOLS`：orderbook 采样数量上限（默认 5）
+- `MARKETDATA_MAX_FUTURES_SYMBOLS`：期货 ticker 拉取数量上限（默认 120）
+- `MARKETDATA_MAX_FUNDING_SYMBOLS`：资金费率拉取数量上限（默认 80）
+- `MARKETDATA_ORDERBOOK_LIMIT`：订单簿档位深度（默认 10）
+- `MARKETDATA_FETCH_CONCURRENCY`：行情并发拉取并发度（默认 10）
+- `DECISION_MAX_DATA_AGE_REFRESH_MS`：动态 `max_data_age_ms` 刷新周期（默认 5000）
+- `DECISION_FUNDING_FAIL_OPEN`：资金费率异常时是否放行（默认 1；设为 0 可强制失败）
+
+建议：
+- 本机调试可降低 `MARKETDATA_MAX_TICKER_SYMBOLS` 与 `MARKETDATA_MAX_FUTURES_SYMBOLS`。
+- 若 `metrics:market_data_service.last_loop_ms` 明显偏大，适当降低并发与拉取数量。
+
+## 6. 权限隔离方案（本机）
 
 建议最小化权限：
 

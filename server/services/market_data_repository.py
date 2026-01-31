@@ -128,7 +128,6 @@ class MarketDataRepository:
             best_ask_price = _parse_float(t.get("ask"))
             if ts is None:
                 ts = t.get("timestamp")
-
         result = OrderBookTOB(
             best_bid_price=best_bid_price,
             best_bid_amount=best_bid_amount,

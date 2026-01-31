@@ -32,8 +32,10 @@ class DatabaseManager:
         self.pg_host = os.getenv('POSTGRES_HOST', 'localhost')
         self.pg_port = int(os.getenv('POSTGRES_PORT', '5432'))
         self.pg_user = os.getenv('POSTGRES_USER', 'inarbit')
-        self.pg_password = os.getenv('POSTGRES_PASSWORD', 'inarbit_secret_2026')
+        self._default_pg_password = 'inarbit_secret_2026'
+        self.pg_password = os.getenv('POSTGRES_PASSWORD', self._default_pg_password)
         self.pg_database = os.getenv('POSTGRES_DB', 'inarbit')
+        self._pg_password_is_default = os.getenv('POSTGRES_PASSWORD') in {None, "", self._default_pg_password}
         
         # Redis 配置
         self.redis_host = os.getenv('REDIS_HOST', 'localhost')
@@ -71,7 +73,11 @@ class DatabaseManager:
             pg_retry_max_delay = float(os.getenv("PG_INIT_RETRY_MAX_DELAY_SECONDS", "5").strip() or "5")
         except Exception:
             pg_retry_max_delay = 5.0
-        
+
+        # 使用默认密码时提示（避免生产误用）
+        if self._pg_password_is_default:
+            logger.warning("PostgreSQL 使用默认密码，请在生产环境设置 POSTGRES_PASSWORD")
+
         # 初始化 PostgreSQL 连接池
         last_error = None
         for attempt in range(1, max(1, pg_retries) + 1):

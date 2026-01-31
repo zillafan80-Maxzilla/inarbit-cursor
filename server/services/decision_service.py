@@ -24,7 +24,7 @@ class RiskConstraints:
     blacklist_symbols: Set[str] = field(default_factory=set)  # 黑名单币种
     whitelist_symbols: Set[str] = field(default_factory=set)  # 白名单币种（若非空则只选这些）
     max_drawdown_per_symbol: Decimal = Decimal('0.05')     # 单币种最大回撤
-    liquidity_score_min: Decimal = Decimal('0.5')         # 最小流动性评分
+    liquidity_score_min: Decimal = Decimal('0.01')        # 最小流动性评分
     max_spread_rate: Decimal = Decimal('0.002')            # 允许的最大点差比例（ask-bid)/mid
     max_data_age_ms: int = 15000                           # 行情/盘口数据最大允许延迟
     min_confidence: Decimal = Decimal('0.50')              # 置信度阈值（过低直接过滤）
@@ -93,6 +93,7 @@ class DecisionService:
             "exposure_multiplier": "1",
             "blacklist_symbols": [],
         }
+        self._scan_max_profit_rate: Optional[Decimal] = None
         self._repo = MarketDataRepository()
         self._regime_service = MarketRegimeService(exchange_id=exchange_id)
         self._task: Optional[asyncio.Task] = None
@@ -117,6 +118,16 @@ class DecisionService:
             self._auto_overlay_interval_ms = int(os.getenv("DECISION_AUTO_OVERLAY_INTERVAL_MS", "2000").strip() or "2000")
         except Exception:
             self._auto_overlay_interval_ms = 2000
+        self._market_data_max_age_ms: Optional[int] = None
+        self._market_data_max_age_last_ms: int = 0
+        try:
+            self._market_data_age_refresh_ms = int(
+                os.getenv("DECISION_MAX_DATA_AGE_REFRESH_MS", "5000").strip() or "5000"
+            )
+        except Exception:
+            self._market_data_age_refresh_ms = 5000
+        raw_fail_open = os.getenv("DECISION_FUNDING_FAIL_OPEN", "1").strip().lower()
+        self._funding_fail_open = raw_fail_open in {"1", "true", "yes", "on"}
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -224,15 +235,22 @@ class DecisionService:
         """扫描机会并应用避险约束，输出决策"""
         start_ts = time.time()
         redis = await get_redis()
+        await self._refresh_market_data_age_override(redis)
         # 读取原始机会
         pipe = redis.pipeline()
         pipe.zrevrange("opportunities:triangular", 0, -1, withscores=True)
         pipe.zrevrange("opportunities:cashcarry", 0, -1, withscores=True)
         tri_raw, cc_raw = await pipe.execute()
+        tri_scores = [float(score) for _, score in tri_raw] if tri_raw else []
+        cc_scores = [float(score) for _, score in cc_raw] if cc_raw else []
+        max_score = max(tri_scores + cc_scores) if (tri_scores or cc_scores) else None
+        self._scan_max_profit_rate = Decimal(str(max_score)) if max_score is not None else None
 
         await self._refresh_auto_overlay(tri_raw, cc_raw)
         await self._refresh_strategy_routing()
         candidates: List[Decision] = []
+        tri_errors = 0
+        cc_errors = 0
 
         # 解析三角套利机会
         for member, score in tri_raw:
@@ -244,6 +262,7 @@ class DecisionService:
                 if decision:
                     candidates.append(decision)
             except Exception:
+                tri_errors += 1
                 continue
 
         # 解析期现套利机会
@@ -256,6 +275,7 @@ class DecisionService:
                 if decision:
                     candidates.append(decision)
             except Exception:
+                cc_errors += 1
                 continue
 
         # 应用全局约束并排序
@@ -302,22 +322,74 @@ class DecisionService:
         # 取主要币种（第一个非USDT）作为敞口标的
         main_symbol = next((s for s in symbols if not s.endswith("/USDT")), symbols[0])
         base = main_symbol.split("/")[0]
+        overlay_blacklist = set(self._auto_overlay.get("blacklist_symbols") or [])
+
+        def _reject(reason: str, extra: dict) -> Optional[Decision]:
+            return None
 
         # 人为约束检查
         if not self._check_symbol_constraints(base):
-            return None
+            return _reject(
+                "symbol_constraints",
+                {
+                    "blacklist": list(self._constraints.blacklist_symbols),
+                    "whitelist": list(self._constraints.whitelist_symbols),
+                    "overlay_blacklist": list(overlay_blacklist),
+                },
+            )
+        if base in overlay_blacklist:
+            overlay_min_profit = self._effective_min_profit_rate()
+            if profit_rate < overlay_min_profit:
+                return _reject(
+                    "overlay_blacklist_low_profit",
+                    {
+                        "overlay_min_profit_rate": float(overlay_min_profit),
+                        "overlay_blacklist": list(overlay_blacklist),
+                    },
+                )
         if profit_rate < self._effective_min_profit_rate():
-            return None
+            return _reject(
+                "min_profit_rate",
+                {
+                    "min_profit_rate": float(self._effective_min_profit_rate()),
+                },
+            )
 
-        # 估算敞口（假设用 1000 USDT 作为基准）
-        estimated_exposure = Decimal('1000')
-        if estimated_exposure > self._effective_max_exposure_per_symbol():
-            return None
+        # 估算敞口（以配置上限为上界，避免固定 1000 直接被覆盖上限拒绝）
+        max_exposure = self._effective_max_exposure_per_symbol()
+        estimated_exposure = min(Decimal("1000"), max_exposure)
+        if base in overlay_blacklist:
+            estimated_exposure = min(estimated_exposure, max_exposure * Decimal("0.5"))
+        if max_exposure <= 0:
+            return _reject(
+                "max_exposure_disabled",
+                {
+                    "estimated_exposure": float(estimated_exposure),
+                    "max_exposure": float(max_exposure),
+                },
+            )
 
         # 机器人动态风险指标
         confidence = await self._calculate_confidence(symbols, profit_rate)
-        if confidence < self._constraints.min_confidence:
-            return None
+        effective_min_profit = self._effective_min_profit_rate()
+        min_confidence = self._constraints.min_confidence
+        if effective_min_profit > 0:
+            try:
+                profit_ratio = profit_rate / effective_min_profit
+            except Exception:
+                profit_ratio = Decimal("0")
+            if profit_ratio >= Decimal("2"):
+                min_confidence = max(Decimal("0.3"), min_confidence - Decimal("0.1"))
+            elif profit_ratio >= Decimal("1.5"):
+                min_confidence = max(Decimal("0.35"), min_confidence - Decimal("0.05"))
+        if confidence < min_confidence:
+            return _reject(
+                "min_confidence",
+                {
+                    "confidence": float(confidence),
+                    "min_confidence": float(min_confidence),
+                },
+            )
 
         if not await self._check_market_safety(base):
             return None
@@ -343,19 +415,71 @@ class DecisionService:
         if not symbol:
             return None
         base = symbol.split("/")[0]
+        overlay_blacklist = set(self._auto_overlay.get("blacklist_symbols") or [])
+
+        def _reject(reason: str, extra: dict) -> Optional[Decision]:
+            return None
 
         if not self._check_symbol_constraints(base):
-            return None
+            return _reject(
+                "symbol_constraints",
+                {
+                    "blacklist": list(self._constraints.blacklist_symbols),
+                    "whitelist": list(self._constraints.whitelist_symbols),
+                    "overlay_blacklist": list(overlay_blacklist),
+                },
+            )
+        if base in overlay_blacklist:
+            overlay_min_profit = self._effective_min_profit_rate()
+            if profit_rate < overlay_min_profit:
+                return _reject(
+                    "overlay_blacklist_low_profit",
+                    {
+                        "overlay_min_profit_rate": float(overlay_min_profit),
+                        "overlay_blacklist": list(overlay_blacklist),
+                    },
+                )
         if profit_rate < self._effective_min_profit_rate():
-            return None
+            return _reject(
+                "min_profit_rate",
+                {
+                    "min_profit_rate": float(self._effective_min_profit_rate()),
+                },
+            )
 
-        estimated_exposure = Decimal('1000')
-        if estimated_exposure > self._effective_max_exposure_per_symbol():
-            return None
+        max_exposure = self._effective_max_exposure_per_symbol()
+        estimated_exposure = min(Decimal("1000"), max_exposure)
+        if base in overlay_blacklist:
+            estimated_exposure = min(estimated_exposure, max_exposure * Decimal("0.5"))
+        if max_exposure <= 0:
+            return _reject(
+                "max_exposure_disabled",
+                {
+                    "estimated_exposure": float(estimated_exposure),
+                    "max_exposure": float(max_exposure),
+                },
+            )
 
         confidence = await self._calculate_confidence([symbol], profit_rate)
-        if confidence < self._constraints.min_confidence:
-            return None
+        effective_min_profit = self._effective_min_profit_rate()
+        min_confidence = self._constraints.min_confidence
+        if effective_min_profit > 0:
+            try:
+                profit_ratio = profit_rate / effective_min_profit
+            except Exception:
+                profit_ratio = Decimal("0")
+            if profit_ratio >= Decimal("2"):
+                min_confidence = max(Decimal("0.3"), min_confidence - Decimal("0.1"))
+            elif profit_ratio >= Decimal("1.5"):
+                min_confidence = max(Decimal("0.35"), min_confidence - Decimal("0.05"))
+        if confidence < min_confidence:
+            return _reject(
+                "min_confidence",
+                {
+                    "confidence": float(confidence),
+                    "min_confidence": float(min_confidence),
+                },
+            )
 
         if not await self._check_market_safety(base):
             return None
@@ -382,15 +506,19 @@ class DecisionService:
         """检查币种黑白名单"""
         if base in self._constraints.blacklist_symbols:
             return False
-        if base in set(self._auto_overlay.get("blacklist_symbols") or []):
-            return False
         if self._constraints.whitelist_symbols and base not in self._constraints.whitelist_symbols:
             return False
         return True
 
     def _effective_min_profit_rate(self) -> Decimal:
         boost = Decimal(str(self._auto_overlay.get("min_profit_rate_boost") or "0"))
-        return self._constraints.min_profit_rate + boost
+        base = self._constraints.min_profit_rate
+        effective = base + boost
+        if self._scan_max_profit_rate is not None and self._scan_max_profit_rate > 0:
+            cap = self._scan_max_profit_rate * Decimal("0.9")
+            if cap < effective:
+                effective = max(base, cap)
+        return effective
 
     def _effective_max_exposure_per_symbol(self) -> Decimal:
         mult = Decimal(str(self._auto_overlay.get("exposure_multiplier") or "1"))
@@ -408,11 +536,33 @@ class DecisionService:
             "max_drawdown_per_symbol": str(self._constraints.max_drawdown_per_symbol),
             "liquidity_score_min": str(self._constraints.liquidity_score_min),
             "max_spread_rate": str(self._constraints.max_spread_rate),
-            "max_data_age_ms": self._constraints.max_data_age_ms,
+            "max_data_age_ms": self._market_data_max_age_ms or self._constraints.max_data_age_ms,
             "min_confidence": str(self._constraints.min_confidence),
             "max_abs_funding_rate": str(self._constraints.max_abs_funding_rate),
         }
 
+    async def _refresh_market_data_age_override(self, redis) -> None:
+        now_ms = int(time.time() * 1000)
+        if self._market_data_max_age_last_ms and (
+            now_ms - self._market_data_max_age_last_ms
+        ) < self._market_data_age_refresh_ms:
+            return
+        last_loop_ms = None
+        effective_max_age = self._constraints.max_data_age_ms
+        try:
+            metrics = await redis.hgetall("metrics:market_data_service")
+            if metrics:
+                raw = metrics.get("last_loop_ms")
+                if raw is not None and str(raw).strip() != "":
+                    last_loop_ms = float(raw)
+                    effective_max_age = max(
+                        self._constraints.max_data_age_ms, int(last_loop_ms * 2.5)
+                    )
+                    effective_max_age = min(effective_max_age, 60000)
+        except Exception:
+            pass
+        self._market_data_max_age_ms = int(effective_max_age)
+        self._market_data_max_age_last_ms = now_ms
     async def _refresh_auto_overlay(self, tri_raw, cc_raw) -> None:
         now_ms = int(time.time() * 1000)
         if self._auto_overlay.get("timestamp_ms"):
@@ -480,7 +630,7 @@ class DecisionService:
                 vol = bba.volume
                 if vol is not None:
                     liquidity_score = min(1.0, max(0.0, float(vol) / 100000000.0))
-                    if liquidity_score < 0.05:
+                    if liquidity_score < float(self._constraints.liquidity_score_min):
                         liquidity_low = True
 
                 return base, age_ms, spread, liquidity_low
@@ -540,16 +690,46 @@ class DecisionService:
         symbol = f"{base}/USDT"
         tob = await self._repo.get_orderbook_tob(self.exchange_id, symbol)
         now_ms = int(time.time() * 1000)
+        effective_max_age_ms = self._market_data_max_age_ms or self._constraints.max_data_age_ms
         bba = None
-        if tob.timestamp_ms and (now_ms - tob.timestamp_ms) > self._constraints.max_data_age_ms:
+        effective_min_liquidity = self._constraints.liquidity_score_min
+        effective_max_spread = self._constraints.max_spread_rate
+        if self._scan_max_profit_rate is not None:
+            if self._scan_max_profit_rate < (self._constraints.min_profit_rate * Decimal("1.5")):
+                effective_min_liquidity = max(Decimal("0.005"), effective_min_liquidity * Decimal("0.5"))
+                effective_max_spread = effective_max_spread * Decimal("2")
+            elif self._scan_max_profit_rate < (self._constraints.min_profit_rate * Decimal("2")):
+                effective_min_liquidity = max(Decimal("0.007"), effective_min_liquidity * Decimal("0.7"))
+                effective_max_spread = effective_max_spread * Decimal("1.5")
+
+        def _normalize_ts(ts: Optional[int]) -> Optional[int]:
+            if ts is None:
+                return None
+            # 兼容秒级时间戳
+            if ts < 1_000_000_000_000:
+                return int(ts) * 1000
+            return int(ts)
+
+        def _reject(reason: str, extra: dict) -> bool:
+            return False
+
+        tob_ts = _normalize_ts(tob.timestamp_ms)
+        if tob_ts and (now_ms - tob_ts) > effective_max_age_ms:
             bba_ts = None
             try:
                 bba = await self._repo.get_best_bid_ask(self.exchange_id, symbol, "spot")
-                bba_ts = bba.timestamp
+                bba_ts = _normalize_ts(bba.timestamp)
             except Exception:
                 bba_ts = None
-            if not bba_ts or (now_ms - int(bba_ts)) > self._constraints.max_data_age_ms:
-                return False
+            if not bba_ts or (now_ms - int(bba_ts)) > effective_max_age_ms:
+                return _reject(
+                    "stale_bba",
+                    {
+                        "tob_age_ms": now_ms - int(tob_ts),
+                        "bba_age_ms": (now_ms - int(bba_ts)) if bba_ts else None,
+                        "max_data_age_ms": effective_max_age_ms,
+                    },
+                )
 
         if bba is None:
             bba = await self._repo.get_best_bid_ask(self.exchange_id, symbol, "spot")
@@ -558,15 +738,21 @@ class DecisionService:
         if bid is not None and ask is not None and (bid + ask) > 0:
             mid = (bid + ask) / 2
             spread_rate = abs(ask - bid) / mid if mid else 1.0
-            if Decimal(str(spread_rate)) > self._constraints.max_spread_rate:
-                return False
+            if Decimal(str(spread_rate)) > effective_max_spread:
+                return _reject(
+                    "spread",
+                    {"spread_rate": float(spread_rate), "max_spread_rate": float(effective_max_spread)},
+                )
 
         vol = bba.volume
         if vol is not None:
             liquidity = Decimal(str(vol)) / Decimal('100000000')
             liquidity_score = max(Decimal('0'), min(Decimal('1'), liquidity))
-            if liquidity_score < self._constraints.liquidity_score_min:
-                return False
+            if liquidity_score < effective_min_liquidity:
+                return _reject(
+                    "liquidity",
+                    {"liquidity_score": float(liquidity_score), "min_liquidity_score": float(effective_min_liquidity)},
+                )
 
         return True
 
@@ -580,7 +766,7 @@ class DecisionService:
                 return False
             return True
         except Exception:
-            return True
+            return self._funding_fail_open
 
     def _apply_global_constraints(self, candidates: List[Decision]) -> List[Decision]:
         """全局约束：去重同币种、控制总敞口、按风险排序"""
@@ -673,26 +859,6 @@ class DecisionService:
             "is_enabled": True,
         })
 
-
-def _normalize_regime_weights(weights: Optional[dict]) -> dict:
-    base = {
-        "RANGE": 1.0,
-        "DOWNTREND": 0.6,
-        "UPTREND": 0.7,
-        "STRESS": 0.2,
-    }
-    if not isinstance(weights, dict):
-        return base
-    for key, value in weights.items():
-        if not key:
-            continue
-        k = str(key).upper()
-        try:
-            base[k] = float(value)
-        except Exception:
-            continue
-    return base
-
     async def _calculate_risk_score(self, base: str, exposure: Decimal, profit_rate: Decimal) -> Decimal:
         """动态风险评分（机器人自行定义）"""
         # 简单模型：波动率 + 流动性 + 敞口 + 收益率
@@ -701,15 +867,15 @@ def _normalize_regime_weights(weights: Optional[dict]) -> dict:
             ticker = await self._repo.get_best_bid_ask(self.exchange_id, f"{base}/USDT", "spot")
             mid = ticker.bid or ticker.ask or ticker.last
             if not mid:
-                return Decimal('1.0')  # 无数据时给高风险
+                return Decimal("1.0")  # 无数据时给高风险
 
             # 假设波动率 = bid-ask spread / mid
             spread = ((ticker.ask or 0) - (ticker.bid or 0))
-            volatility = spread / mid if mid else Decimal('1')
+            volatility = spread / mid if mid else Decimal("1")
 
             # 流动性评分 = volume / 1e8（归一化）
-            liquidity = Decimal(str(ticker.volume or 0)) / Decimal('100000000')
-            liquidity_score = max(Decimal('0'), min(Decimal('1'), liquidity))
+            liquidity = Decimal(str(ticker.volume or 0)) / Decimal("100000000")
+            liquidity_score = max(Decimal("0"), min(Decimal("1"), liquidity))
 
             # 敞口因子
             exposure_factor = exposure / self._constraints.max_exposure_per_symbol
@@ -718,10 +884,15 @@ def _normalize_regime_weights(weights: Optional[dict]) -> dict:
             profit_factor = 1 - profit_rate
 
             # 综合风险评分（越低越好）
-            risk = volatility * Decimal('0.4') + (1 - liquidity_score) * Decimal('0.3') + exposure_factor * Decimal('0.2') + profit_factor * Decimal('0.1')
-            return max(Decimal('0'), min(Decimal('1'), risk))
+            risk = (
+                volatility * Decimal("0.4")
+                + (1 - liquidity_score) * Decimal("0.3")
+                + exposure_factor * Decimal("0.2")
+                + profit_factor * Decimal("0.1")
+            )
+            return max(Decimal("0"), min(Decimal("1"), risk))
         except Exception:
-            return Decimal('1.0')
+            return Decimal("1.0")
 
     async def _calculate_confidence(self, symbols: List[str], profit_rate: Decimal) -> Decimal:
         """置信度：数据新鲜度 + 收益率稳定性"""
@@ -753,12 +924,32 @@ def _normalize_regime_weights(weights: Optional[dict]) -> dict:
                     continue
                 ages.append(item)
             if not ages:
-                return Decimal('0.5')
+                return Decimal("0.5")
             avg_age_ms = sum(ages) / len(ages)
             # 数据越新置信度越高
-            freshness = max(Decimal('0'), 1 - Decimal(avg_age_ms) / Decimal('30000'))  # 30秒内算新鲜
+            freshness = max(Decimal("0"), 1 - Decimal(avg_age_ms) / Decimal("30000"))  # 30秒内算新鲜
             # 收益率越高置信度略高（防止假信号）
-            profit_confidence = min(Decimal('1'), profit_rate * Decimal('100'))
-            return (freshness * Decimal('0.7') + profit_confidence * Decimal('0.3')).quantize(Decimal('0.01'))
+            profit_confidence = min(Decimal("1"), profit_rate * Decimal("100"))
+            return (freshness * Decimal("0.7") + profit_confidence * Decimal("0.3")).quantize(Decimal("0.01"))
         except Exception:
-            return Decimal('0.5')
+            return Decimal("0.5")
+
+
+def _normalize_regime_weights(weights: Optional[dict]) -> dict:
+    base = {
+        "RANGE": 1.0,
+        "DOWNTREND": 0.6,
+        "UPTREND": 0.7,
+        "STRESS": 0.2,
+    }
+    if not isinstance(weights, dict):
+        return base
+    for key, value in weights.items():
+        if not key:
+            continue
+        k = str(key).upper()
+        try:
+            base[k] = float(value)
+        except Exception:
+            continue
+    return base

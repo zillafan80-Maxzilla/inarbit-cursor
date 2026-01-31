@@ -76,6 +76,14 @@ description: Inarbit 高频交易系统 - 全程任务清单
 
 ## 当前断点（2026-01-30）
 
+### 本次完成并推送
+
+- 集成测试改为 ASGI 进程内调用，避免依赖外部端口
+- 行情采集/决策/风控配置项补充并支持运行时调优
+- 资金费率异常支持 fail-open 选项（可配置）
+- PostgreSQL 默认密码告警提示
+- 清理运行时调试埋点与临时日志
+
 ### 已完成并推送
 
 - 修复 MaxDrawdownCircuitBreaker 峰值更新（a0c3df5）
@@ -87,7 +95,8 @@ description: Inarbit 高频交易系统 - 全程任务清单
 
 ### 已验证
 
-- 回归测试：`python -m pytest -q` → 36 passed, 6 skipped
+- 健康检查：`GET /health` → 200
+- 回归测试：`python -m pytest -q` → 34 passed, 8 skipped, 1 warning
 
 ### 待继续
 

@@ -19,11 +19,32 @@ _ORDERBOOK_TTL_SECONDS = 15
 _FUTURES_TICKER_TTL_SECONDS = 20
 _FUNDING_TTL_SECONDS = 60 * 60 * 8
 
-_MAX_TICKER_SYMBOLS = 200
-_MAX_ORDERBOOK_SYMBOLS = 5
-_MAX_FUTURES_TICKER_SYMBOLS = 120
-_MAX_FUNDING_SYMBOLS = 80
-_ORDERBOOK_LIMIT = 10
+try:
+    _MAX_TICKER_SYMBOLS = int(os.getenv("MARKETDATA_MAX_TICKER_SYMBOLS", "200").strip() or "200")
+except Exception:
+    _MAX_TICKER_SYMBOLS = 200
+try:
+    _MAX_ORDERBOOK_SYMBOLS = int(os.getenv("MARKETDATA_MAX_ORDERBOOK_SYMBOLS", "5").strip() or "5")
+except Exception:
+    _MAX_ORDERBOOK_SYMBOLS = 5
+try:
+    _MAX_FUTURES_TICKER_SYMBOLS = int(os.getenv("MARKETDATA_MAX_FUTURES_SYMBOLS", "120").strip() or "120")
+except Exception:
+    _MAX_FUTURES_TICKER_SYMBOLS = 120
+try:
+    _MAX_FUNDING_SYMBOLS = int(os.getenv("MARKETDATA_MAX_FUNDING_SYMBOLS", "80").strip() or "80")
+except Exception:
+    _MAX_FUNDING_SYMBOLS = 80
+try:
+    _ORDERBOOK_LIMIT = int(os.getenv("MARKETDATA_ORDERBOOK_LIMIT", "10").strip() or "10")
+except Exception:
+    _ORDERBOOK_LIMIT = 10
+try:
+    _FETCH_CONCURRENCY = int(os.getenv("MARKETDATA_FETCH_CONCURRENCY", "10").strip() or "10")
+except Exception:
+    _FETCH_CONCURRENCY = 10
+if _FETCH_CONCURRENCY < 1:
+    _FETCH_CONCURRENCY = 1
 _RETRY_DELAY_SECONDS = 10
 
 
@@ -137,7 +158,7 @@ class MarketDataService:
                                 tickers = await spot.fetch_tickers(spot_ticker_symbols)
                             except Exception:
                                 # 批量失败时降级为并发拉取，避免单个 BadSymbol 打断整轮
-                                semaphore = asyncio.Semaphore(10)
+                                semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
                                 async def _fetch_one(sym: str):
                                     async with semaphore:
@@ -180,7 +201,7 @@ class MarketDataService:
                                 futures_symbols_usdt = futures_symbols_usdt[:_MAX_FUTURES_TICKER_SYMBOLS]
                                 futures_symbol_count = len(futures_symbols_usdt)
                                 futures_tickers: dict = {}
-                                semaphore = asyncio.Semaphore(10)
+                                semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
                                 async def _fetch_future(sym: str):
                                     async with semaphore:
@@ -297,7 +318,7 @@ class MarketDataService:
                             if futures_symbols_usdt:
                                 futures_symbol_count = len(futures_symbols_usdt)
                                 futures_tickers: dict = {}
-                                semaphore = asyncio.Semaphore(10)
+                                semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
                                 async def _fetch_future(sym: str):
                                     async with semaphore:
@@ -426,6 +447,10 @@ class MarketDataService:
         index_key = f"symbols:{key_prefix}"
 
         pipe = redis.pipeline()
+        written_count = 0
+        stale_count = 0
+        max_age_ms = None
+        max_age_symbol = None
         for symbol, t in (tickers or {}).items():
             if not isinstance(t, dict):
                 continue
@@ -442,16 +467,35 @@ class MarketDataService:
                 continue
 
             key = f"{key_prefix}:{symbol}"
+            exchange_ts = t.get("timestamp")
+            try:
+                exchange_ts = (
+                    int(float(exchange_ts)) if exchange_ts is not None and str(exchange_ts).strip() != "" else None
+                )
+            except Exception:
+                exchange_ts = None
+            if exchange_ts is not None and exchange_ts < 1_000_000_000_000:
+                exchange_ts *= 1000
+            # 记录交易所时间戳，但以本地写入时间作为 freshness 判断
+            ingest_ts = now_ms
+            age_ms = now_ms - int(exchange_ts) if exchange_ts is not None else None
+            if age_ms is not None and age_ms > 15000:
+                stale_count += 1
+                if max_age_ms is None or age_ms > max_age_ms:
+                    max_age_ms = age_ms
+                    max_age_symbol = symbol
             mapping = {
                 "bid": "" if bid is None else str(bid),
                 "ask": "" if ask is None else str(ask),
                 "last": "" if last is None else str(last),
                 "volume": "" if t.get("quoteVolume") is None else str(t.get("quoteVolume")),
-                "timestamp": str(t.get("timestamp") or now_ms),
+                "timestamp": str(ingest_ts),
+                "exchange_timestamp": "" if exchange_ts is None else str(exchange_ts),
             }
             pipe.hset(key, mapping=mapping)
             pipe.expire(key, ttl_seconds)
             pipe.sadd(index_key, symbol)
+            written_count += 1
 
         try:
             pipe.expire(index_key, max(60, ttl_seconds * 6))
@@ -466,7 +510,7 @@ class MarketDataService:
         redis = await get_redis()
         pipe = redis.pipeline()
 
-        semaphore = asyncio.Semaphore(10)
+        semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
         async def _fetch(symbol: str):
             async with semaphore:
@@ -477,12 +521,21 @@ class MarketDataService:
                     return symbol, None
 
         results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+        ok_count = 0
+        none_count = 0
+        exception_count = 0
         for item in results:
             if isinstance(item, Exception):
+                exception_count += 1
+                continue
+            if not item or not isinstance(item, tuple):
+                none_count += 1
                 continue
             symbol, ob = item
             if ob is None:
+                none_count += 1
                 continue
+            ok_count += 1
             await self._write_orderbook_snapshot_to_redis(exchange_id, symbol, ob, pipe=pipe)
 
         try:
@@ -710,7 +763,6 @@ class MarketDataService:
 
         bids = (ob or {}).get("bids") or []
         asks = (ob or {}).get("asks") or []
-
         bids_key = f"orderbook:{exchange_id}:{symbol}:bids"
         asks_key = f"orderbook:{exchange_id}:{symbol}:asks"
         ts_key = f"orderbook:{exchange_id}:{symbol}:ts"
@@ -744,7 +796,7 @@ class MarketDataService:
 
     async def _fetch_funding_rates(self, futures_exchange, symbols: list[str]) -> dict[str, dict]:
         result: dict[str, dict] = {}
-        semaphore = asyncio.Semaphore(10)
+        semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
         async def _fetch(symbol: str):
             async with semaphore:
