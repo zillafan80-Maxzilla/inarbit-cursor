@@ -46,3 +46,5 @@ Thumbs.db
 serviceAccountKey.json
 %KEY%
 %KEY%.pub
+gcp_server_key
+gcp_server_key.pub

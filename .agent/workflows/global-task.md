@@ -111,3 +111,36 @@ description: Inarbit 高频交易系统 - 全程任务清单
 - Git 推送请使用：`scripts/git_ssh_443.ps1 push`
 - 后端启动：`python start_server.py`
 - API 基址：读取 `.cursor/api_port.json` 的 `base`
+
+### SSH 22/433 不通根因与修复（2026-01-31）
+
+**根因总结**
+- `433` 为错误端口（应为 `443`），实例未监听且防火墙未放行该端口。
+- `22` 端口虽放行，但 `sshd` 仍受 GCE Guest Agent/OS Login 的 `AuthorizedKeysCommand` 影响，root 公钥未稳定落盘（含编码/BOM 影响），导致认证阶段被关闭。
+- 连接端口与用户配置未统一，造成多次切换端口/用户名，表现为连接不稳定。
+
+**最终解决方案**
+- 通过 `startup-script` 显式写入 `/root/.ssh/authorized_keys`，在 `sshd_config.d` 中禁用 `AuthorizedKeysCommand`，并禁用密码登录。
+- 固定 SSH 端口为 `2222` 并放行防火墙；`22` 仅作备用，`443` 预留给 HTTPS。
+- 本地 `.ssh/config` 增加 `Host inarbit2222` 统一入口。
+
+**参考命令**
+- 放行端口：`gcloud compute firewall-rules create allow-ssh-2222 --project www-inarbit-work --allow tcp:2222 --target-tags http-server,https-server --source-ranges 0.0.0.0/0`
+- 测试登录：`ssh -p 2222 -i C:\Users\周浩\.cursor\cursor-workspace\inarbit\gcp_server_key root@136.109.140.114`
+
+### 远程部署进度（2026-01-31）
+
+**已完成**
+- 代码部署到 `/opt/inarbit`，后端依赖安装完成（`venv`）
+- 数据服务：`docker-compose up -d` 启动 PostgreSQL/Redis
+- 初始化：`INARBIT_INIT_CONFIRM=YES INARBIT_SKIP_EXCHANGE=1 ./venv/bin/python test_system_init.py`
+- API 服务：`/etc/systemd/system/inarbit-api.service` 并已 `enable --now`
+- 前端构建：`cd /opt/inarbit/client && npm run build`
+- Nginx：`/etc/nginx/sites-available/inarbit`，反向代理 `/api` 与 `/ws`
+- 远程测试：`python -m pytest -q` → `37 passed, 5 skipped, 1 warning`
+
+**待处理**
+- HTTPS 证书：Certbot 失败，域名仍指向 `35.212.164.201`（旧 IP）
+  - 将 `inarbit.work` 与 `www.inarbit.work` 的 A 记录更新为 `136.109.140.114`
+  - 确认 80/443 防火墙放行后重试：
+    `certbot --nginx -d inarbit.work -d www.inarbit.work --non-interactive --agree-tos -m admin@inarbit.work --redirect`

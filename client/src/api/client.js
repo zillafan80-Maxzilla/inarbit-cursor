@@ -5,9 +5,9 @@
 
 // 使用相对路径，让 Vite 代理转发请求到后端
 const API_BASE_URL = '/api/v1';
-// WebSocket 需要使用绝对路径，但使用后端端口
+// WebSocket 使用同源（生产）或环境变量覆盖
 const WS_BASE_URL = import.meta.env.VITE_WS_URL
-    || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000/ws`;
+    || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
 
 
 /**
