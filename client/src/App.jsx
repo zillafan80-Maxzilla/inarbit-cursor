@@ -74,41 +74,6 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   const location = useLocation();
   const isActive = (path) => location.pathname === path ? 'active' : '';
   
-  // 侧边栏宽度调整
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('sidebar_width');
-    return saved ? parseInt(saved) : 360;
-  });
-  const [isResizing, setIsResizing] = useState(false);
-
-  useEffect(() => {
-    if (!isResizing) {
-      document.body.classList.remove('resizing-sidebar');
-      return;
-    }
-
-    document.body.classList.add('resizing-sidebar');
-
-    const handleMouseMove = (e) => {
-      const newWidth = Math.max(200, Math.min(600, e.clientX));
-      setSidebarWidth(newWidth);
-      localStorage.setItem('sidebar_width', newWidth);
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-      document.body.classList.remove('resizing-sidebar');
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.classList.remove('resizing-sidebar');
-    };
-  }, [isResizing]);
 
   // 菜单配置
   const menuGroups = [
@@ -161,7 +126,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   ];
 
   return (
-    <aside className="sidebar" style={{ width: `${sidebarWidth}px`, position: 'relative' }}>
+    <aside className="sidebar">
       {/* 用户信息区域 */}
       <div className="sidebar-user">
         <div className="user-avatar">用</div>
@@ -204,24 +169,6 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
           {tradingMode === 'live' ? '🔴 实盘' : '🟢 模拟'}
         </div>
       </div>
-      
-      {/* 拖动条 */}
-      <div 
-        className="sidebar-resizer"
-        onMouseDown={() => setIsResizing(true)}
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          width: '4px',
-          height: '100%',
-          cursor: 'ew-resize',
-          backgroundColor: 'transparent',
-          transition: 'background-color 0.2s',
-        }}
-        onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--primary-green)'}
-        onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
-      />
     </aside>
   );
 };
