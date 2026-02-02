@@ -9,12 +9,12 @@ import { exchangeV2API } from '../api/client';
 
 // 支持的交易所列表
 const SUPPORTED_EXCHANGES = [
-    { id: 'binance', name: 'Binance', fullName: 'Binance', icon: '🟡', color: '#F0B90B', setupSupported: true },
-    { id: 'okx', name: 'OKX', fullName: 'OKX', icon: '⚪', color: '#121212', setupSupported: false },
-    { id: 'bybit', name: 'Bybit', fullName: 'Bybit', icon: '🟠', color: '#F7A600', setupSupported: false },
-    { id: 'gate', name: 'Gate.io', fullName: 'Gate.io', icon: '🔵', color: '#2354E6', setupSupported: false },
-    { id: 'bitget', name: 'Bitget', fullName: 'Bitget', icon: '🟢', color: '#00C853', setupSupported: false },
-    { id: 'mexc', name: 'MEXC', fullName: 'MEXC', icon: '🔷', color: '#1C9AEA', setupSupported: false }
+    { id: 'binance', name: 'Binance', fullName: 'Binance', icon: '🟡', color: '#F0B90B' },
+    { id: 'okx', name: 'OKX', fullName: 'OKX', icon: '⚪', color: '#121212' },
+    { id: 'bybit', name: 'Bybit', fullName: 'Bybit', icon: '🟠', color: '#F7A600' },
+    { id: 'gate', name: 'Gate.io', fullName: 'Gate.io', icon: '🔵', color: '#2354E6' },
+    { id: 'bitget', name: 'Bitget', fullName: 'Bitget', icon: '🟢', color: '#00C853' },
+    { id: 'mexc', name: 'MEXC', fullName: 'MEXC', icon: '🔷', color: '#1C9AEA' }
 ];
 
 const ExchangeManagement = () => {
@@ -589,11 +589,14 @@ const ExchangeManagement = () => {
             {/* 支持的交易所 */}
             <h2 className="section-title" style={{ marginTop: '32px' }}>支持的交易所</h2>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {SUPPORTED_EXCHANGES.map(ex => (
-                        <span key={ex.id} className={`table-badge ${ex.setupSupported ? 'success' : 'neutral'}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            {ex.icon} {ex.name} {ex.setupSupported ? '已接入' : '待接入'}
+                {SUPPORTED_EXCHANGES.map(ex => {
+                    const isConfigured = exchanges.some(e => e.exchange_id === ex.id || e.id === ex.id);
+                    return (
+                        <span key={ex.id} className={`table-badge ${isConfigured ? 'success' : 'neutral'}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {ex.icon} {ex.name} {isConfigured ? '已接入' : '待接入'}
                         </span>
-                ))}
+                    );
+                })}
             </div>
 
             {/* 模态框 */}
