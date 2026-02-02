@@ -69,6 +69,13 @@ const UserManagement = () => {
                 setEmailConfig(data);
             } catch (e) {
                 console.error('加载邮件配置失败:', e);
+                // 如果加载失败（如401），使用profile中的email作为默认值
+                // 等待profile加载完成后再设置
+                setTimeout(() => {
+                    if (profile.email) {
+                        setEmailConfig(prev => ({ ...prev, email: profile.email }));
+                    }
+                }, 1000);
             }
         };
         
@@ -76,6 +83,13 @@ const UserManagement = () => {
         loadEmailConfig();
         return () => { mounted = false; };
     }, []);
+    
+    // 当profile.email更新时，同步到emailConfig
+    useEffect(() => {
+        if (profile.email && !emailConfig.email) {
+            setEmailConfig(prev => ({ ...prev, email: profile.email }));
+        }
+    }, [profile.email]);
     
     const handleSaveEmailConfig = async () => {
         setEmailSaving(true);
