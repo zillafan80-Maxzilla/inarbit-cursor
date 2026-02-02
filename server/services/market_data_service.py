@@ -83,36 +83,57 @@ class MarketDataService:
         await self._run_polling()
 
     async def _run_polling(self) -> None:
+        # 支持通过环境变量切换交易所
+        exchange_provider = os.getenv("EXCHANGE_PROVIDER", "binance").lower()
+        logger.info(f"MarketDataService using exchange: {exchange_provider}")
+        
         while not self._stop_event.is_set():
             spot = None
             futures = None
             spot_session = None
             futures_session = None
             try:
-                spot = ccxt.binance({
-                    "enableRateLimit": True,
-                    "options": {
-                        "defaultType": "spot",
-                        # 避免调用受限的 SAPI 接口导致 404
-                        "fetchCurrencies": False,
-                        "fetchMargins": False,
-                    },
-                })
+                if exchange_provider == "okx":
+                    spot = ccxt.okx({
+                        "apiKey": os.getenv("OKX_API_KEY"),
+                        "secret": os.getenv("OKX_API_SECRET"),
+                        "password": os.getenv("OKX_PASSPHRASE"),
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "spot"},
+                    })
+                    futures = ccxt.okx({
+                        "apiKey": os.getenv("OKX_API_KEY"),
+                        "secret": os.getenv("OKX_API_SECRET"),
+                        "password": os.getenv("OKX_PASSPHRASE"),
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "swap"},
+                    })
+                else:
+                    spot = ccxt.binance({
+                        "enableRateLimit": True,
+                        "options": {
+                            "defaultType": "spot",
+                            # 避免调用受限的 SAPI 接口导致 404
+                            "fetchCurrencies": False,
+                            "fetchMargins": False,
+                        },
+                    })
 
-                futures = ccxt.binance({
-                    "enableRateLimit": True,
-                    "options": {
-                        "defaultType": "future",
-                        # 避免调用受限的 SAPI 接口导致 404
-                        "fetchCurrencies": False,
-                        "fetchMargins": False,
-                    },
-                })
+                    futures = ccxt.binance({
+                        "enableRateLimit": True,
+                        "options": {
+                            "defaultType": "future",
+                            # 避免调用受限的 SAPI 接口导致 404
+                            "fetchCurrencies": False,
+                            "fetchMargins": False,
+                        },
+                    })
 
-                # 自动选择可用 API 地址（适配网络环境）
-                base_url = await get_binance_base_url()
-                apply_binance_base_url(spot, base_url)
-                apply_binance_base_url(futures, base_url)
+                # 自动选择可用 API 地址（适配网络环境，仅 Binance 需要）
+                if exchange_provider == "binance":
+                    base_url = await get_binance_base_url()
+                    apply_binance_base_url(spot, base_url)
+                    apply_binance_base_url(futures, base_url)
 
                 spot_session = _create_threaded_dns_session()
                 futures_session = _create_threaded_dns_session()
@@ -138,7 +159,7 @@ class MarketDataService:
                     futures_symbol_count = 0
                     funding_symbol_count = 0
                     try:
-                        config_spot_symbols = await self._get_symbols_for_exchange("binance", limit=_MAX_TICKER_SYMBOLS)
+                        config_spot_symbols = await self._get_symbols_for_exchange(exchange_provider, limit=_MAX_TICKER_SYMBOLS)
                         spot_ticker_symbols = list(config_spot_symbols)
                         if spot_ticker_symbols:
                             spot_symbol_count = len(spot_ticker_symbols)
@@ -179,10 +200,10 @@ class MarketDataService:
                                         tickers[sym] = t
 
                             if tickers:
-                                await self._write_spot_tickers_to_redis("binance", tickers)
+                                await self._write_spot_tickers_to_redis(exchange_provider, tickers)
 
                             orderbook_symbols = (config_spot_symbols or spot_ticker_symbols)[:_MAX_ORDERBOOK_SYMBOLS]
-                            await self._write_spot_orderbooks_to_redis("binance", spot, orderbook_symbols)
+                            await self._write_spot_orderbooks_to_redis(exchange_provider, spot, orderbook_symbols)
 
                         futures_symbols = []
                         if futures_markets_ok:
@@ -235,7 +256,7 @@ class MarketDataService:
                                         futures_tickers[base_symbol] = ticker
 
                                 if futures_tickers:
-                                    await self._write_futures_tickers_to_redis("binance", futures_tickers)
+                                    await self._write_futures_tickers_to_redis(exchange_provider, futures_tickers)
 
                                 funding_symbols = futures_symbols_usdt[: min(_MAX_FUNDING_SYMBOLS, len(futures_symbols_usdt))]
                                 funding_symbol_count = len(funding_symbols)
@@ -244,7 +265,7 @@ class MarketDataService:
                                     funding_symbols,
                                 )
                                 if funding:
-                                    await self._write_funding_to_redis("binance", funding)
+                                    await self._write_funding_to_redis(exchange_provider, funding)
                     except Exception:
                         logger.exception("MarketDataService loop error")
 
@@ -310,7 +331,7 @@ class MarketDataService:
                 futures_symbol_count = 0
                 funding_symbol_count = 0
                 try:
-                    spot_symbols = await self._get_symbols_for_exchange("binance", limit=_MAX_TICKER_SYMBOLS)
+                    spot_symbols = await self._get_symbols_for_exchange(exchange_provider, limit=_MAX_TICKER_SYMBOLS)
                     if spot_symbols:
                         futures_symbols = self._map_to_futures_symbols(futures, spot_symbols)
                         if futures_symbols:
@@ -338,13 +359,13 @@ class MarketDataService:
                                     if ticker is not None:
                                         futures_tickers[sym] = ticker
                                 if futures_tickers:
-                                    await self._write_futures_tickers_to_redis("binance", futures_tickers)
+                                    await self._write_futures_tickers_to_redis(exchange_provider, futures_tickers)
 
                                 funding_symbols = futures_symbols_usdt[: min(10, len(futures_symbols_usdt))]
                                 funding_symbol_count = len(funding_symbols)
                                 funding = await self._fetch_funding_rates(futures, funding_symbols)
                                 if funding:
-                                    await self._write_funding_to_redis("binance", funding)
+                                    await self._write_funding_to_redis(exchange_provider, funding)
                 except Exception:
                     logger.exception("MarketDataService futures polling loop error")
 
@@ -550,6 +571,9 @@ class MarketDataService:
             await self._run_polling()
             return
 
+        exchange_provider = os.getenv("EXCHANGE_PROVIDER", "binance").lower()
+        logger.info(f"MarketDataService ccxt.pro using exchange: {exchange_provider}")
+
         while not self._stop_event.is_set():
             spot = None
             futures = None
@@ -559,14 +583,30 @@ class MarketDataService:
             futures_polling_task: Optional[asyncio.Task] = None
 
             try:
-                spot = ccxtpro.binance({
-                    "enableRateLimit": True,
-                    "options": {"defaultType": "spot"},
-                })
-                futures = ccxtpro.binance({
-                    "enableRateLimit": True,
-                    "options": {"defaultType": "future"},
-                })
+                if exchange_provider == "okx":
+                    spot = ccxtpro.okx({
+                        "apiKey": os.getenv("OKX_API_KEY"),
+                        "secret": os.getenv("OKX_API_SECRET"),
+                        "password": os.getenv("OKX_PASSPHRASE"),
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "spot"},
+                    })
+                    futures = ccxtpro.okx({
+                        "apiKey": os.getenv("OKX_API_KEY"),
+                        "secret": os.getenv("OKX_API_SECRET"),
+                        "password": os.getenv("OKX_PASSPHRASE"),
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "swap"},
+                    })
+                else:
+                    spot = ccxtpro.binance({
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "spot"},
+                    })
+                    futures = ccxtpro.binance({
+                        "enableRateLimit": True,
+                        "options": {"defaultType": "future"},
+                    })
 
                 spot_session = _create_threaded_dns_session()
                 futures_session = _create_threaded_dns_session()
@@ -582,7 +622,7 @@ class MarketDataService:
                     futures_ok = False
                     logger.warning(f"MarketDataService futures(ws) init failed, fallback to polling: {e}")
 
-                spot_symbols = await self._get_symbols_for_exchange("binance", limit=_MAX_TICKER_SYMBOLS)
+                spot_symbols = await self._get_symbols_for_exchange(exchange_provider, limit=_MAX_TICKER_SYMBOLS)
                 if not spot_symbols:
                     logger.warning("ccxt.pro 模式：未找到可订阅的 trading_pairs")
                     try:
@@ -595,17 +635,17 @@ class MarketDataService:
                 futures_symbols = self._map_to_futures_symbols(futures, spot_symbols) if futures_ok else []
 
                 for symbol in spot_symbols:
-                    tasks.append(asyncio.create_task(self._pro_watch_spot_ticker(spot, "binance", symbol)))
+                    tasks.append(asyncio.create_task(self._pro_watch_spot_ticker(spot, exchange_provider, symbol)))
 
                 for symbol in orderbook_symbols:
-                    tasks.append(asyncio.create_task(self._pro_watch_spot_orderbook(spot, "binance", symbol)))
+                    tasks.append(asyncio.create_task(self._pro_watch_spot_orderbook(spot, exchange_provider, symbol)))
 
                 if futures_ok:
                     for symbol in futures_symbols:
-                        tasks.append(asyncio.create_task(self._pro_watch_futures_ticker(futures, "binance", symbol)))
+                        tasks.append(asyncio.create_task(self._pro_watch_futures_ticker(futures, exchange_provider, symbol)))
 
                     for symbol in [s for s in futures_symbols if "USDT" in s][: min(10, len(futures_symbols))]:
-                        tasks.append(asyncio.create_task(self._pro_watch_funding(futures, "binance", symbol)))
+                        tasks.append(asyncio.create_task(self._pro_watch_funding(futures, exchange_provider, symbol)))
                 else:
                     futures_polling_task = asyncio.create_task(self._run_futures_polling_only())
 
