@@ -811,14 +811,18 @@ class MarketDataService:
         local_pipe.delete(asks_key)
 
         bid_members = {}
-        for price, amount in bids[:_ORDERBOOK_LIMIT]:
+        for bid_item in bids[:_ORDERBOOK_LIMIT]:
+            # OKX返回 [price, amount, num_orders, ...], 只取前两个
+            price, amount = bid_item[0], bid_item[1]
             bid_members[f"{price}:{amount}"] = float(price)
         if bid_members:
             local_pipe.zadd(bids_key, bid_members)
             local_pipe.expire(bids_key, _ORDERBOOK_TTL_SECONDS)
 
         ask_members = {}
-        for price, amount in asks[:_ORDERBOOK_LIMIT]:
+        for ask_item in asks[:_ORDERBOOK_LIMIT]:
+            # OKX返回 [price, amount, num_orders, ...], 只取前两个
+            price, amount = ask_item[0], ask_item[1]
             ask_members[f"{price}:{amount}"] = float(price)
         if ask_members:
             local_pipe.zadd(asks_key, ask_members)
