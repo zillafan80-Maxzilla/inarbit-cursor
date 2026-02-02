@@ -87,6 +87,15 @@ async def lifespan(app: FastAPI):
             logger.info("✅ 运行时统计服务已启动")
         except Exception as e:
             logger.warning(f"运行时统计服务启动失败(可忽略): {e}")
+        
+        # 2.6 启动邮件简报服务
+        try:
+            from .services.email_report_service import get_email_report_service
+            email_service = await get_email_report_service()
+            await email_service.start()
+            logger.info("✅ 邮件简报服务已启动")
+        except Exception as e:
+            logger.warning(f"邮件简报服务启动失败(可忽略): {e}")
 
         try:
             async with db.pg_connection() as conn:
@@ -161,6 +170,13 @@ async def lifespan(app: FastAPI):
             logger.info("✅ 运行时统计服务已停止")
         except Exception:
             pass
+        try:
+            from .services.email_report_service import get_email_report_service
+            email_service = await get_email_report_service()
+            await email_service.stop()
+            logger.info("✅ 邮件简报服务已停止")
+        except Exception:
+            pass
         await db.close()
         logger.info("✅ 数据库连接已关闭")
     except Exception as e:
@@ -228,6 +244,7 @@ from .api.oms_routes import router as oms_router
 from .api.market_routes import router as market_router
 from .api.stats_routes import router as stats_router
 from .api.strategy_routes import router as strategy_router
+from .api.user_routes import router as user_router
 
 
 # 注册路由 - 统一管理
@@ -244,6 +261,7 @@ app.include_router(oms_router, tags=["V1 - OMS"])
 app.include_router(market_router, prefix="/api/v1", tags=["V1 - Market"])
 app.include_router(stats_router, tags=["V1 - Runtime Stats"])
 app.include_router(strategy_router, prefix="/api/v1", tags=["V1 - Strategies"])
+app.include_router(user_router, tags=["V1 - User Management"])
 
 # V2 路由（优化版）
 app.include_router(exchange_v2_router, tags=["V2 - Exchanges"])

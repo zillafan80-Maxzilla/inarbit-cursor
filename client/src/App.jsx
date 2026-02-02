@@ -26,6 +26,7 @@ import ArbitrageMonitor from './pages/ArbitrageMonitor'
 import ConfigCatalog from './pages/ConfigCatalog'
 import AdminHub from './pages/AdminHub'
 import RealtimeOverview from './pages/RealtimeOverview'
+import EmailReportSettings from './pages/EmailReportSettings'
 
 import OmsConsole from './pages/OmsConsole'
 import OmsConfig from './pages/OmsConfig'
@@ -157,6 +158,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
         { path: '/sim-config', icon: '⚙️', label: '模拟配置' },
         { path: '/logs', icon: '📋', label: '运行日志' },
         { path: '/user', icon: '👤', label: '账户与密钥' },
+        { path: '/email-report', icon: '📧', label: '邮件简报' },
       ]
     },
   ];
@@ -309,6 +311,7 @@ function App() {
 
                 {/* 用户管理 */}
                 <Route path="/user" element={authed ? <UserManagement /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/email-report" element={authed ? <EmailReportSettings /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 {/* 配置 */}
                 <Route path="/strategies" element={authed ? <Strategies /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
