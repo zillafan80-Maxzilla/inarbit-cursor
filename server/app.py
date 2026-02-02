@@ -96,6 +96,15 @@ async def lifespan(app: FastAPI):
             logger.info("✅ 邮件简报服务已启动")
         except Exception as e:
             logger.warning(f"邮件简报服务启动失败(可忽略): {e}")
+        
+        # 2.7 启动做空杠杆策略服务
+        try:
+            from .services.short_leverage_service import get_short_leverage_service
+            short_service = await get_short_leverage_service()
+            await short_service.start()
+            logger.info("✅ 做空杠杆策略服务已启动")
+        except Exception as e:
+            logger.warning(f"做空杠杆策略服务启动失败(可忽略): {e}")
 
         try:
             async with db.pg_connection() as conn:
