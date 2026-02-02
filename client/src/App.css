@@ -209,10 +209,11 @@ body {
 }
 
 /* =============================================
-   侧边栏导航 - 药丸胶囊形状风格
+   侧边栏导航 - 药丸胶囊形状风格 + 可调整宽度
    ============================================= */
 .sidebar {
-  width: 360px;
+  min-width: 200px;
+  max-width: 600px;
   background-color: #f0f0eb;
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -220,6 +221,25 @@ body {
   flex-shrink: 0;
   overflow-y: auto;
   padding: 12px;
+  user-select: none;
+}
+
+.sidebar-resizer {
+  z-index: 10;
+}
+
+.sidebar-resizer:hover {
+  background-color: var(--primary-green) !important;
+}
+
+/* 拖动时禁止文本选择 */
+body.resizing-sidebar {
+  user-select: none;
+  cursor: ew-resize;
+}
+
+body.resizing-sidebar * {
+  cursor: ew-resize !important;
 }
 
 /* 用户信息区域 - 胶囊形状 */
