@@ -41,27 +41,28 @@ class RuntimeStatsService:
             self._start_time = float(existing_start)
             logger.info(f"✅ 恢复运行统计，开始时间: {datetime.fromtimestamp(self._start_time)}")
         
-        # 获取初始资金（从paper_trading表）
+        # 获取或设置初始资金（默认1000 USDT）
         async with pool.acquire() as conn:
-            paper_config = await conn.fetchrow("""
-                SELECT initial_balance, current_balance 
-                FROM paper_trading 
-                ORDER BY created_at DESC LIMIT 1
-            """)
-            
-            if paper_config:
-                initial = float(paper_config['initial_balance'])
-                current = float(paper_config['current_balance'])
+            # 检查是否已有初始余额记录
+            existing_balance = await redis.hget(STATS_KEY, "initial_balance")
+            if not existing_balance:
+                # 设置默认初始资金
+                initial = 1000.0
+                current = 1000.0
                 await redis.hset(STATS_KEY, mapping={
                     "initial_balance": str(initial),
                     "current_balance": str(current),
-                    "net_profit": str(current - initial)
+                    "net_profit": "0.0"
                 })
+                logger.info(f"✅ 设置默认初始资金: {initial} USDT")
             
-            # 获取交易模式
-            global_config = await conn.fetchrow("SELECT trading_mode FROM global_config LIMIT 1")
+            # 获取交易模式和机器人状态
+            global_config = await conn.fetchrow("SELECT trading_mode, bot_status FROM global_settings LIMIT 1")
             if global_config:
-                await redis.hset(STATS_KEY, "trading_mode", global_config['trading_mode'])
+                await redis.hset(STATS_KEY, mapping={
+                    "trading_mode": global_config['trading_mode'] or 'paper',
+                    "bot_status": global_config['bot_status'] or 'stopped'
+                })
             
             # 获取启用的策略
             strategies = await conn.fetch("""
@@ -125,34 +126,59 @@ class RuntimeStatsService:
         redis = await get_redis()
         pool = await get_pg_pool()
         
-        # 更新当前余额
+        # 从Redis获取当前余额（模拟模式下不会实际变化）
+        initial_str = await redis.hget(STATS_KEY, "initial_balance")
+        current_str = await redis.hget(STATS_KEY, "current_balance")
+        
+        initial_balance = float(initial_str.decode() if isinstance(initial_str, bytes) else initial_str or "1000")
+        current_balance = float(current_str.decode() if isinstance(current_str, bytes) else current_str or "1000")
+        
+        # 更新最后更新时间
+        await redis.hset(STATS_KEY, mapping={
+            "last_update": str(time.time())
+        })
+        
+        # 记录利润历史（用于绘制曲线）
+        timestamp = int(time.time())
+        await redis.zadd(
+            PROFIT_HISTORY_KEY,
+            {f"{timestamp}:{current_balance}": timestamp}
+        )
+        
+        # 只保留最近24小时的数据
+        cutoff = timestamp - 86400
+        await redis.zremrangebyscore(PROFIT_HISTORY_KEY, "-inf", cutoff)
+        
+        # 定期从数据库刷新配置信息
         async with pool.acquire() as conn:
-            paper_config = await conn.fetchrow("""
-                SELECT current_balance FROM paper_trading 
-                ORDER BY created_at DESC LIMIT 1
-            """)
-            
-            if paper_config:
-                current_balance = float(paper_config['current_balance'])
-                initial_str = await redis.hget(STATS_KEY, "initial_balance")
-                initial_balance = float(initial_str) if initial_str else current_balance
-                
+            # 刷新交易模式和bot状态
+            global_config = await conn.fetchrow("SELECT trading_mode, bot_status FROM global_settings LIMIT 1")
+            if global_config:
                 await redis.hset(STATS_KEY, mapping={
-                    "current_balance": str(current_balance),
-                    "net_profit": str(current_balance - initial_balance),
-                    "last_update": str(time.time())
+                    "trading_mode": global_config['trading_mode'] or 'paper',
+                    "bot_status": global_config['bot_status'] or 'running'
                 })
-                
-                # 记录利润历史（用于绘制曲线）
-                timestamp = int(time.time())
-                await redis.zadd(
-                    PROFIT_HISTORY_KEY,
-                    {f"{timestamp}:{current_balance}": timestamp}
-                )
-                
-                # 只保留最近24小时的数据
-                cutoff = timestamp - 86400
-                await redis.zremrangebyscore(PROFIT_HISTORY_KEY, "-inf", cutoff)
+            
+            # 刷新启用的策略
+            strategies = await conn.fetch("SELECT strategy_type FROM strategy_configs WHERE is_enabled = true")
+            strategy_names = [s['strategy_type'] for s in strategies] if strategies else []
+            await redis.hset(STATS_KEY, "active_strategies", ",".join(strategy_names) if strategy_names else "")
+            
+            # 刷新启用的交易所
+            exchanges = await conn.fetch("SELECT DISTINCT exchange_id FROM exchange_configs WHERE is_active = true")
+            exchange_names = [e['exchange_id'] for e in exchanges] if exchanges else []
+            await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
+            
+            # 刷新交易对
+            pairs = await conn.fetch("""
+                SELECT DISTINCT tp.symbol 
+                FROM trading_pairs tp 
+                JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
+                WHERE etp.is_enabled = true 
+                LIMIT 20
+            """)
+            pair_symbols = [p['symbol'] for p in pairs] if pairs else []
+            await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
     
     async def get_stats(self) -> Dict:
         """获取当前统计信息"""
@@ -176,6 +202,29 @@ class RuntimeStatsService:
             for member, score in profit_history
         ]
         
+        # 辅助函数：安全解码字节或返回字符串
+        def decode_value(val, default=""):
+            if val is None:
+                return default
+            if isinstance(val, bytes):
+                return val.decode()
+            return str(val)
+        
+        trading_mode = decode_value(stats.get("trading_mode"), "paper")
+        bot_status = decode_value(stats.get("bot_status"), "running")
+        
+        strategies_str = decode_value(stats.get("active_strategies"), "")
+        active_strategies = strategies_str.split(",") if strategies_str else ["无"]
+        active_strategies = [s for s in active_strategies if s] or ["无"]
+        
+        exchanges_str = decode_value(stats.get("active_exchanges"), "")
+        active_exchanges = exchanges_str.split(",") if exchanges_str else ["无"]
+        active_exchanges = [e for e in active_exchanges if e] or ["无"]
+        
+        pairs_str = decode_value(stats.get("trading_pairs"), "")
+        trading_pairs = pairs_str.split(",")[:10] if pairs_str else ["无"]
+        trading_pairs = [p for p in trading_pairs if p] or ["无"]
+        
         return {
             "current_time": datetime.now().isoformat(),
             "runtime": {
@@ -184,13 +233,14 @@ class RuntimeStatsService:
                 "seconds": seconds,
                 "total_seconds": runtime_seconds
             },
-            "trading_mode": stats.get("trading_mode", "无").decode() if isinstance(stats.get("trading_mode"), bytes) else stats.get("trading_mode", "无"),
-            "active_strategies": (stats.get("active_strategies", b"").decode() if isinstance(stats.get("active_strategies"), bytes) else stats.get("active_strategies", "")).split(",") if stats.get("active_strategies") else ["无"],
-            "active_exchanges": (stats.get("active_exchanges", b"").decode() if isinstance(stats.get("active_exchanges"), bytes) else stats.get("active_exchanges", "")).split(",") if stats.get("active_exchanges") else ["无"],
-            "trading_pairs": (stats.get("trading_pairs", b"").decode() if isinstance(stats.get("trading_pairs"), bytes) else stats.get("trading_pairs", "")).split(",")[:10] if stats.get("trading_pairs") else ["无"],
-            "initial_balance": float(stats.get("initial_balance", b"0").decode() if isinstance(stats.get("initial_balance"), bytes) else stats.get("initial_balance", "0")),
-            "current_balance": float(stats.get("current_balance", b"0").decode() if isinstance(stats.get("current_balance"), bytes) else stats.get("current_balance", "0")),
-            "net_profit": float(stats.get("net_profit", b"0").decode() if isinstance(stats.get("net_profit"), bytes) else stats.get("net_profit", "0")),
+            "trading_mode": trading_mode,
+            "bot_status": bot_status,
+            "active_strategies": active_strategies,
+            "active_exchanges": active_exchanges,
+            "trading_pairs": trading_pairs,
+            "initial_balance": float(decode_value(stats.get("initial_balance"), "1000")),
+            "current_balance": float(decode_value(stats.get("current_balance"), "1000")),
+            "net_profit": float(decode_value(stats.get("net_profit"), "0")),
             "profit_history": profit_data
         }
     
