@@ -57,7 +57,7 @@ impl RiskCheck for RiskManager {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct RiskRemote {
     base_url: String,
     token: String,
