@@ -78,6 +78,15 @@ async def lifespan(app: FastAPI):
             logger.info("✅ 决策器服务已启动")
         except Exception as e:
             logger.warning(f"决策器服务启动失败(可忽略但建议修复): {e}")
+        
+        # 2.5 启动运行时统计服务
+        try:
+            from .services.runtime_stats_service import get_runtime_stats_service
+            stats_service = await get_runtime_stats_service()
+            await stats_service.start()
+            logger.info("✅ 运行时统计服务已启动")
+        except Exception as e:
+            logger.warning(f"运行时统计服务启动失败(可忽略): {e}")
 
         try:
             async with db.pg_connection() as conn:
@@ -145,6 +154,13 @@ async def lifespan(app: FastAPI):
             logger.info("✅ 决策器服务已停止")
         except Exception:
             pass
+        try:
+            from .services.runtime_stats_service import get_runtime_stats_service
+            stats_service = await get_runtime_stats_service()
+            await stats_service.stop()
+            logger.info("✅ 运行时统计服务已停止")
+        except Exception:
+            pass
         await db.close()
         logger.info("✅ 数据库连接已关闭")
     except Exception as e:
@@ -210,6 +226,7 @@ from .api.arbitrage_routes import router as arbitrage_router
 from .api.decision_routes import router as decision_router
 from .api.oms_routes import router as oms_router
 from .api.market_routes import router as market_router
+from .api.stats_routes import router as stats_router
 
 
 # 注册路由 - 统一管理
@@ -224,6 +241,7 @@ app.include_router(arbitrage_router, tags=["V1 - Arbitrage"])
 app.include_router(decision_router, tags=["V1 - Decision"])
 app.include_router(oms_router, tags=["V1 - OMS"])
 app.include_router(market_router, prefix="/api/v1", tags=["V1 - Market"])
+app.include_router(stats_router, tags=["V1 - Runtime Stats"])
 
 # V2 路由（优化版）
 app.include_router(exchange_v2_router, tags=["V2 - Exchanges"])

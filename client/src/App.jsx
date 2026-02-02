@@ -26,6 +26,7 @@ import ArbitrageMonitor from './pages/ArbitrageMonitor'
 import ConfigCatalog from './pages/ConfigCatalog'
 import AdminHub from './pages/AdminHub'
 import RealtimeOverview from './pages/RealtimeOverview'
+import RuntimeStats from './pages/RuntimeStats'
 
 import OmsConsole from './pages/OmsConsole'
 import OmsConfig from './pages/OmsConfig'
@@ -80,7 +81,8 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       title: '管理总览',
       items: [
         { path: '/admin', icon: '🗺️', label: '管理总览' },
-        { path: '/realtime', icon: '🕒', label: '实时总览', showStatus: true },
+        { path: '/runtime-stats', icon: '📊', label: '运行统计', showStatus: true },
+        { path: '/realtime', icon: '🕒', label: '实时总览' },
         { path: '/control', icon: '🎛️', label: '控制面板' },
         { path: '/system', icon: '🧭', label: '系统概览' },
       ]
@@ -226,11 +228,12 @@ function App() {
 
                 <Route path="/" element={
                   authed ? (
-                    <Navigate to="/realtime" replace />
+                    <Navigate to="/runtime-stats" replace />
                   ) : (
                     <Login onLogin={(u) => setCurrentUser(u)} />
                   )
                 } />
+                <Route path="/runtime-stats" element={authed ? <RuntimeStats /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/realtime" element={authed ? <RealtimeOverview /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/control" element={
                   authed ? (
