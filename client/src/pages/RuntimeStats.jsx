@@ -61,15 +61,25 @@ export default function RuntimeStats() {
     return <div className="p-6">加载中...</div>;
   }
 
-  if (!stats) {
+  if (!stats || !stats.runtime) {
     return <div className="p-6">暂无统计数据</div>;
   }
+
+  // 安全的数据访问，提供默认值
+  const runtime = stats.runtime || { hours: 0, minutes: 0, seconds: 0 };
+  const tradingMode = stats.trading_mode || '未知';
+  const initialBalance = stats.initial_balance || 0;
+  const currentBalance = stats.current_balance || 0;
+  const netProfit = stats.net_profit || 0;
+  const activeStrategies = (stats.active_strategies || ['无']).filter(s => s && s !== '无');
+  const activeExchanges = (stats.active_exchanges || ['无']).filter(e => e && e !== '无');
+  const tradingPairs = (stats.trading_pairs || ['无']).filter(p => p && p !== '无');
 
   // 格式化收益曲线数据
   const chartData = (stats.profit_history || []).map(item => ({
     time: new Date(item.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     balance: item.balance,
-    profit: item.balance - stats.initial_balance
+    profit: item.balance - initialBalance
   }));
 
   return (
@@ -88,7 +98,7 @@ export default function RuntimeStats() {
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="text-sm text-blue-600 font-semibold mb-1">运行时长</div>
           <div className="text-2xl font-bold text-blue-900">
-            {stats.runtime.hours}小时 {stats.runtime.minutes}分 {stats.runtime.seconds}秒
+            {runtime.hours}小时 {runtime.minutes}分 {runtime.seconds}秒
           </div>
         </div>
 
@@ -96,7 +106,7 @@ export default function RuntimeStats() {
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
           <div className="text-sm text-purple-600 font-semibold mb-1">运行模式</div>
           <div className="text-2xl font-bold text-purple-900">
-            {stats.trading_mode === 'paper' ? '模拟盘' : stats.trading_mode === 'live' ? '实盘' : '未知'}
+            {tradingMode === 'paper' ? '模拟盘' : tradingMode === 'live' ? '实盘' : '未知'}
           </div>
         </div>
 
@@ -104,7 +114,7 @@ export default function RuntimeStats() {
         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
           <div className="text-sm text-green-600 font-semibold mb-1">初始资金</div>
           <div className="text-2xl font-bold text-green-900">
-            ${stats.initial_balance.toFixed(2)}
+            ${initialBalance.toFixed(2)}
           </div>
         </div>
 
@@ -112,18 +122,18 @@ export default function RuntimeStats() {
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <div className="text-sm text-yellow-600 font-semibold mb-1">当前资金</div>
           <div className="text-2xl font-bold text-yellow-900">
-            ${stats.current_balance.toFixed(2)}
+            ${currentBalance.toFixed(2)}
           </div>
         </div>
 
         {/* 净利润 */}
-        <div className={`border rounded-lg p-4 ${stats.net_profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
-          <div className={`text-sm font-semibold mb-1 ${stats.net_profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>净利润</div>
-          <div className={`text-2xl font-bold ${stats.net_profit >= 0 ? 'text-emerald-900' : 'text-red-900'}`}>
-            {stats.net_profit >= 0 ? '+' : ''}{stats.net_profit.toFixed(2)} USDT
+        <div className={`border rounded-lg p-4 ${netProfit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+          <div className={`text-sm font-semibold mb-1 ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>净利润</div>
+          <div className={`text-2xl font-bold ${netProfit >= 0 ? 'text-emerald-900' : 'text-red-900'}`}>
+            {netProfit >= 0 ? '+' : ''}{netProfit.toFixed(2)} USDT
           </div>
-          <div className={`text-xs mt-1 ${stats.net_profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-            收益率: {stats.initial_balance > 0 ? ((stats.net_profit / stats.initial_balance) * 100).toFixed(2) : 0}%
+          <div className={`text-xs mt-1 ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+            收益率: {initialBalance > 0 ? ((netProfit / initialBalance) * 100).toFixed(2) : 0}%
           </div>
         </div>
 
@@ -131,8 +141,8 @@ export default function RuntimeStats() {
         <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
           <div className="text-sm text-indigo-600 font-semibold mb-1">交易策略</div>
           <div className="text-sm text-indigo-900 space-y-1">
-            {stats.active_strategies && stats.active_strategies.length > 0 && stats.active_strategies[0] !== '无' ? (
-              stats.active_strategies.map((s, i) => <div key={i}>• {s}</div>)
+            {activeStrategies.length > 0 ? (
+              activeStrategies.map((s, i) => <div key={i}>• {s}</div>)
             ) : (
               <div className="text-gray-500">无</div>
             )}
@@ -143,8 +153,8 @@ export default function RuntimeStats() {
         <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
           <div className="text-sm text-orange-600 font-semibold mb-1">交易所</div>
           <div className="text-sm text-orange-900 space-y-1">
-            {stats.active_exchanges && stats.active_exchanges.length > 0 && stats.active_exchanges[0] !== '无' ? (
-              stats.active_exchanges.map((e, i) => <div key={i}>• {e.toUpperCase()}</div>)
+            {activeExchanges.length > 0 ? (
+              activeExchanges.map((e, i) => <div key={i}>• {e.toUpperCase()}</div>)
             ) : (
               <div className="text-gray-500">无</div>
             )}
@@ -155,8 +165,8 @@ export default function RuntimeStats() {
         <div className="bg-pink-50 border border-pink-200 rounded-lg p-4">
           <div className="text-sm text-pink-600 font-semibold mb-1">交易币对</div>
           <div className="text-xs text-pink-900 max-h-16 overflow-y-auto">
-            {stats.trading_pairs && stats.trading_pairs.length > 0 && stats.trading_pairs[0] !== '无' ? (
-              stats.trading_pairs.map((p, i) => <span key={i} className="inline-block mr-2">{p}</span>)
+            {tradingPairs.length > 0 ? (
+              tradingPairs.map((p, i) => <span key={i} className="inline-block mr-2">{p}</span>)
             ) : (
               <div className="text-gray-500">无</div>
             )}
