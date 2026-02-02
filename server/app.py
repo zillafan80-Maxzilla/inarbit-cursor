@@ -227,6 +227,7 @@ from .api.decision_routes import router as decision_router
 from .api.oms_routes import router as oms_router
 from .api.market_routes import router as market_router
 from .api.stats_routes import router as stats_router
+from .api.strategy_routes import router as strategy_router
 
 
 # 注册路由 - 统一管理
@@ -242,6 +243,7 @@ app.include_router(decision_router, tags=["V1 - Decision"])
 app.include_router(oms_router, tags=["V1 - OMS"])
 app.include_router(market_router, prefix="/api/v1", tags=["V1 - Market"])
 app.include_router(stats_router, tags=["V1 - Runtime Stats"])
+app.include_router(strategy_router, prefix="/api/v1", tags=["V1 - Strategies"])
 
 # V2 路由（优化版）
 app.include_router(exchange_v2_router, tags=["V2 - Exchanges"])
