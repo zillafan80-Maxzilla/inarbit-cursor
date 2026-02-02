@@ -16,5 +16,16 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    preview: {
+      port: 5174,
+      host: '0.0.0.0',
+      allowedHosts: [
+        'inarbit.work',
+        'www.inarbit.work',
+        '136.109.140.114',
+        'localhost',
+        '127.0.0.1'
+      ]
+    }
   }
 })
