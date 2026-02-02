@@ -254,6 +254,7 @@ from .api.market_routes import router as market_router
 from .api.stats_routes import router as stats_router
 from .api.strategy_routes import router as strategy_router
 from .api.user_routes import router as user_router
+from .api.bot_control_routes import router as bot_control_router
 
 
 # 注册路由 - 统一管理
@@ -271,6 +272,7 @@ app.include_router(market_router, prefix="/api/v1", tags=["V1 - Market"])
 app.include_router(stats_router, tags=["V1 - Runtime Stats"])
 app.include_router(strategy_router, prefix="/api/v1", tags=["V1 - Strategies"])
 app.include_router(user_router, tags=["V1 - User Management"])
+app.include_router(bot_control_router, tags=["V1 - Bot Control"])
 
 # V2 路由（优化版）
 app.include_router(exchange_v2_router, tags=["V2 - Exchanges"])
