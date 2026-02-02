@@ -3,7 +3,7 @@
 包含邮件简报配置
 """
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
 import logging
 
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/user", tags=["User Management"])
 class EmailReportConfig(BaseModel):
     """邮件简报配置"""
     enabled: bool
-    email: EmailStr
+    email: str
     report_time: str = "09:00"  # 格式: HH:MM
 
 
