@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useApi } from '../api/hooks';
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+
+const fetchAPI = async (path) => {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+};
 
 export default function RuntimeStats() {
-  const { apiGet } = useApi();
   const [stats, setStats] = useState(null);
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12,7 +23,7 @@ export default function RuntimeStats() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await apiGet('/api/v1/stats/realtime');
+        const res = await fetchAPI('/api/v1/stats/realtime');
         if (res.success) {
           setStats(res.data);
         }
@@ -25,7 +36,7 @@ export default function RuntimeStats() {
 
     const fetchTrades = async () => {
       try {
-        const res = await apiGet('/api/v1/stats/trades/recent?limit=20');
+        const res = await fetchAPI('/api/v1/stats/trades/recent?limit=20');
         if (res.success) {
           setTrades(res.data);
         }
