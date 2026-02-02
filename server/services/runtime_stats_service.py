@@ -68,22 +68,29 @@ class RuntimeStatsService:
             strategies = await conn.fetch("""
                 SELECT strategy_type FROM strategy_configs WHERE is_enabled = true
             """)
-            strategy_names = [s['strategy_type'] for s in strategies]
-            await redis.hset(STATS_KEY, "active_strategies", ",".join(strategy_names))
+            strategy_names = [s['strategy_type'] for s in strategies] if strategies else []
+            await redis.hset(STATS_KEY, "active_strategies", ",".join(strategy_names) if strategy_names else "")
+            logger.info(f"📊 活跃策略: {strategy_names}")
             
             # 获取启用的交易所
             exchanges = await conn.fetch("""
                 SELECT DISTINCT exchange_id FROM exchange_configs WHERE is_active = true
             """)
-            exchange_names = [e['exchange_id'] for e in exchanges]
-            await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names))
+            exchange_names = [e['exchange_id'] for e in exchanges] if exchanges else []
+            await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
+            logger.info(f"📊 活跃交易所: {exchange_names}")
             
-            # 获取交易对
+            # 获取交易对（使用与update相同的JOIN查询）
             pairs = await conn.fetch("""
-                SELECT symbol FROM trading_pairs WHERE is_active = true LIMIT 20
+                SELECT DISTINCT tp.symbol 
+                FROM trading_pairs tp 
+                JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
+                WHERE etp.is_enabled = true 
+                LIMIT 20
             """)
-            pair_symbols = [p['symbol'] for p in pairs]
-            await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols))
+            pair_symbols = [p['symbol'] for p in pairs] if pairs else []
+            await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
+            logger.info(f"📊 活跃交易对: {pair_symbols}")
         
         logger.info("✅ 运行统计信息初始化完成")
     

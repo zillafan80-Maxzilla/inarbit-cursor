@@ -110,9 +110,10 @@ const RealtimeOverview = () => {
     // 优先使用stats数据，回退到summary数据
     const runtime = stats?.runtime || { hours: 0, minutes: 0, seconds: 0 };
     const tradingMode = stats?.trading_mode || summary.trading_mode || '无';
-    const initialBalance = stats?.initial_balance || Number(summary.initial_capital || 0);
-    const currentBalance = stats?.current_balance || Number(summary.current_balance || 0);
-    const netProfit = stats?.net_profit || Number(summary.net_profit || 0);
+    const botStatus = stats?.bot_status || summary.bot_status || 'stopped';
+    const initialBalance = stats?.initial_balance ?? Number(summary.initial_capital || 1000);
+    const currentBalance = stats?.current_balance ?? Number(summary.current_balance || 1000);
+    const netProfit = stats?.net_profit ?? Number(summary.net_profit || 0);
     const activeStrategies = stats?.active_strategies?.filter(s => s && s !== '无') || summary.strategies || [];
     const activeExchanges = stats?.active_exchanges?.filter(e => e && e !== '无') || summary.exchanges || [];
     const tradingPairs = stats?.trading_pairs?.filter(p => p && p !== '无') || summary.pairs || [];
@@ -233,7 +234,7 @@ const RealtimeOverview = () => {
                 <div className="stat-box">
                     <div className="stat-label">机器人状态</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
-                        {summary.bot_status === 'running' ? '🟢 运行中' : summary.bot_status || '无'}
+                        {botStatus === 'running' ? '🟢 运行中' : botStatus === 'stopped' ? '🔴 已停止' : botStatus || '无'}
                     </div>
                 </div>
                 <div className="stat-box">
