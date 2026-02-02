@@ -209,10 +209,11 @@ body {
 }
 
 /* =============================================
-   侧边栏导航 - 药丸胶囊形状风格 + 自定义滚动条
+   侧边栏导航 - 药丸胶囊形状风格 + 可拖动调整宽度
    ============================================= */
 .sidebar {
-  width: 360px;
+  min-width: 200px;
+  max-width: 600px;
   background-color: #f0f0eb;
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -225,35 +226,72 @@ body {
 
 /* 自定义滚动条样式 */
 .sidebar::-webkit-scrollbar {
-  width: 12px;
+  width: 8px;
 }
 
 .sidebar::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 6px;
-  margin: 4px;
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .sidebar::-webkit-scrollbar-thumb {
-  background: var(--primary-green);
-  border-radius: 6px;
-  border: 2px solid rgba(0, 0, 0, 0.05);
-  transition: background 0.2s;
+  background: rgba(74, 93, 74, 0.3);
+  border-radius: 4px;
 }
 
 .sidebar::-webkit-scrollbar-thumb:hover {
-  background: var(--primary-green-dark);
-  border: 2px solid rgba(74, 93, 74, 0.2);
+  background: rgba(74, 93, 74, 0.5);
 }
 
-.sidebar::-webkit-scrollbar-thumb:active {
-  background: var(--primary-green-hover);
+/* 可拖动分隔条 - 垂直边条，左右拖动 */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: ew-resize;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(74, 93, 74, 0.1) 50%, 
+    transparent 100%
+  );
+  z-index: 10;
+  transition: background 0.2s;
 }
 
-/* Firefox 滚动条 */
-.sidebar {
-  scrollbar-width: thin;
-  scrollbar-color: var(--primary-green) rgba(0, 0, 0, 0.05);
+.sidebar-resizer:hover {
+  background: linear-gradient(90deg, 
+    rgba(74, 93, 74, 0.2) 0%, 
+    rgba(74, 93, 74, 0.4) 50%, 
+    rgba(74, 93, 74, 0.2) 100%
+  );
+}
+
+.sidebar-resizer::before {
+  content: '⋮';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--primary-green);
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.sidebar-resizer:hover::before {
+  opacity: 0.6;
+}
+
+/* 拖动时的全局样式 */
+body.resizing-sidebar {
+  user-select: none;
+  cursor: ew-resize !important;
+}
+
+body.resizing-sidebar * {
+  cursor: ew-resize !important;
 }
 
 /* 用户信息区域 - 胶囊形状 */

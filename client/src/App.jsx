@@ -69,10 +69,46 @@ const GlobalFooter = () => (
   </footer>
 );
 
-// 侧边栏导航组件 (重构版 - 简洁风格 + 可调整宽度)
+// 侧边栏导航组件 (重构版 - 简洁风格 + 可拖动调整宽度)
 const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   const location = useLocation();
   const isActive = (path) => location.pathname === path ? 'active' : '';
+  
+  // 侧边栏宽度拖动调整
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('sidebar_width');
+    return saved ? parseInt(saved) : 360;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+    if (!isResizing) {
+      document.body.classList.remove('resizing-sidebar');
+      return;
+    }
+
+    document.body.classList.add('resizing-sidebar');
+
+    const handleMouseMove = (e) => {
+      const newWidth = Math.max(200, Math.min(600, e.clientX));
+      setSidebarWidth(newWidth);
+      localStorage.setItem('sidebar_width', newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.body.classList.remove('resizing-sidebar');
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.classList.remove('resizing-sidebar');
+    };
+  }, [isResizing]);
   
 
   // 菜单配置
@@ -126,7 +162,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   ];
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={{ width: `${sidebarWidth}px`, position: 'relative' }}>
       {/* 用户信息区域 */}
       <div className="sidebar-user">
         <div className="user-avatar">用</div>
@@ -169,6 +205,12 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
           {tradingMode === 'live' ? '🔴 实盘' : '🟢 模拟'}
         </div>
       </div>
+      
+      {/* 可拖动分隔条 - 垂直边条，左右拖动调整宽度 */}
+      <div 
+        className="sidebar-resizer"
+        onMouseDown={() => setIsResizing(true)}
+      />
     </aside>
   );
 };
