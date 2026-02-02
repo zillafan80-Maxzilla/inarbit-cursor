@@ -166,7 +166,7 @@ async def reset_system(request: ResetRequest, user: CurrentUser = Depends(requir
 
 
 @router.get("/status")
-async def get_system_status(user: CurrentUser = Depends(require_admin)):
+async def get_system_status(user: CurrentUser = Depends(get_current_user)):
     """获取系统状态"""
     try:
         pool = await get_pg_pool()
@@ -205,7 +205,7 @@ async def get_system_status(user: CurrentUser = Depends(require_admin)):
 
 
 @router.get("/metrics")
-async def get_system_metrics(user: CurrentUser = Depends(require_admin)):
+async def get_system_metrics(user: CurrentUser = Depends(get_current_user)):
     """获取系统关键指标"""
     try:
         redis = await get_redis()
