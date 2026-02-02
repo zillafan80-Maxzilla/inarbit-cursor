@@ -202,24 +202,6 @@ class RuntimeStatsService:
         """获取当前统计信息"""
         redis = await get_redis()
         
-        stats = await redis.hgetall(STATS_KEY)
-        if not stats:
-            return {"status": "initializing"}
-        
-        # 计算运行时长
-        start_ts = float(stats.get("start_timestamp", time.time()))
-        runtime_seconds = int(time.time() - start_ts)
-        hours = runtime_seconds // 3600
-        minutes = (runtime_seconds % 3600) // 60
-        seconds = runtime_seconds % 60
-        
-        # 获取利润历史
-        profit_history = await redis.zrange(PROFIT_HISTORY_KEY, 0, -1, withscores=True)
-        profit_data = [
-            {"timestamp": int(score), "balance": float(member.decode().split(":")[1])}
-            for member, score in profit_history
-        ]
-        
         # 辅助函数：安全解码字节或返回字符串
         def decode_value(val, default=""):
             if val is None:
@@ -228,18 +210,44 @@ class RuntimeStatsService:
                 return val.decode()
             return str(val)
         
-        trading_mode = decode_value(stats.get("trading_mode"), "paper")
-        bot_status = decode_value(stats.get("bot_status"), "running")
+        stats = await redis.hgetall(STATS_KEY)
+        if not stats:
+            return {"status": "initializing"}
         
-        strategies_str = decode_value(stats.get("active_strategies"), "")
+        # 解码所有stats键值（因为redis可能返回bytes）
+        decoded_stats = {decode_value(k): decode_value(v) for k, v in stats.items()}
+        
+        # 计算运行时长
+        start_ts = float(decoded_stats.get("start_timestamp", str(time.time())))
+        runtime_seconds = int(time.time() - start_ts)
+        hours = runtime_seconds // 3600
+        minutes = (runtime_seconds % 3600) // 60
+        seconds = runtime_seconds % 60
+        
+        # 获取利润历史
+        profit_history = await redis.zrange(PROFIT_HISTORY_KEY, 0, -1, withscores=True)
+        profit_data = []
+        for member, score in profit_history:
+            try:
+                member_str = decode_value(member)
+                if ":" in member_str:
+                    balance = float(member_str.split(":")[1])
+                    profit_data.append({"timestamp": int(score), "balance": balance})
+            except:
+                pass
+        
+        trading_mode = decoded_stats.get("trading_mode", "paper")
+        bot_status = decoded_stats.get("bot_status", "running")
+        
+        strategies_str = decoded_stats.get("active_strategies", "")
         active_strategies = strategies_str.split(",") if strategies_str else ["无"]
         active_strategies = [s for s in active_strategies if s] or ["无"]
         
-        exchanges_str = decode_value(stats.get("active_exchanges"), "")
+        exchanges_str = decoded_stats.get("active_exchanges", "")
         active_exchanges = exchanges_str.split(",") if exchanges_str else ["无"]
         active_exchanges = [e for e in active_exchanges if e] or ["无"]
         
-        pairs_str = decode_value(stats.get("trading_pairs"), "")
+        pairs_str = decoded_stats.get("trading_pairs", "")
         trading_pairs = pairs_str.split(",")[:10] if pairs_str else ["无"]
         trading_pairs = [p for p in trading_pairs if p] or ["无"]
         
@@ -256,9 +264,9 @@ class RuntimeStatsService:
             "active_strategies": active_strategies,
             "active_exchanges": active_exchanges,
             "trading_pairs": trading_pairs,
-            "initial_balance": float(decode_value(stats.get("initial_balance"), "1000")),
-            "current_balance": float(decode_value(stats.get("current_balance"), "1000")),
-            "net_profit": float(decode_value(stats.get("net_profit"), "0")),
+            "initial_balance": float(decoded_stats.get("initial_balance", "1000")),
+            "current_balance": float(decoded_stats.get("current_balance", "1000")),
+            "net_profit": float(decoded_stats.get("net_profit", "0")),
             "profit_history": profit_data
         }
     
