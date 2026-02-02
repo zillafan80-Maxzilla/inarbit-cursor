@@ -80,14 +80,20 @@ class RuntimeStatsService:
             await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
             logger.info(f"📊 活跃交易所: {exchange_names}")
             
-            # 获取交易对（使用与update相同的JOIN查询）
-            pairs = await conn.fetch("""
-                SELECT DISTINCT tp.symbol 
-                FROM trading_pairs tp 
-                JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
-                WHERE etp.is_enabled = true 
-                LIMIT 20
-            """)
+            # 获取交易对 - 先尝试JOIN查询，如果失败则使用简单查询
+            try:
+                pairs = await conn.fetch("""
+                    SELECT DISTINCT tp.symbol 
+                    FROM trading_pairs tp 
+                    JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
+                    WHERE etp.is_enabled = true 
+                    LIMIT 20
+                """)
+            except Exception as join_err:
+                logger.warning(f"exchange_trading_pairs表查询失败，使用备用查询: {join_err}")
+                pairs = await conn.fetch("""
+                    SELECT symbol FROM trading_pairs WHERE is_active = true LIMIT 20
+                """)
             pair_symbols = [p['symbol'] for p in pairs] if pairs else []
             await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
             logger.info(f"📊 活跃交易对: {pair_symbols}")
@@ -176,14 +182,19 @@ class RuntimeStatsService:
             exchange_names = [e['exchange_id'] for e in exchanges] if exchanges else []
             await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
             
-            # 刷新交易对
-            pairs = await conn.fetch("""
-                SELECT DISTINCT tp.symbol 
-                FROM trading_pairs tp 
-                JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
-                WHERE etp.is_enabled = true 
-                LIMIT 20
-            """)
+            # 刷新交易对 - 先尝试JOIN查询，如果失败则使用简单查询
+            try:
+                pairs = await conn.fetch("""
+                    SELECT DISTINCT tp.symbol 
+                    FROM trading_pairs tp 
+                    JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
+                    WHERE etp.is_enabled = true 
+                    LIMIT 20
+                """)
+            except Exception:
+                pairs = await conn.fetch("""
+                    SELECT symbol FROM trading_pairs WHERE is_active = true LIMIT 20
+                """)
             pair_symbols = [p['symbol'] for p in pairs] if pairs else []
             await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
     
