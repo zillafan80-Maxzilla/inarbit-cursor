@@ -103,6 +103,7 @@ body {
   overflow: hidden;
   height: calc(100vh - 48px - 36px);
   /* 视口高度减去边条 */
+  max-height: calc(100vh - 48px - 36px);
 }
 
 /* =============================================
@@ -222,6 +223,8 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px;
+  height: 100%;
+  max-height: calc(100vh - 48px - 36px);
 }
 
 /* 自定义滚动条样式 */
@@ -501,6 +504,8 @@ body.resizing-sidebar * {
   flex-direction: column;
   overflow: hidden;
   background-color: var(--bg-main);
+  height: 100%;
+  max-height: calc(100vh - 48px - 36px);
 }
 
 .top-bar {
@@ -512,6 +517,8 @@ body.resizing-sidebar * {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
 }
 
 /* =============================================
