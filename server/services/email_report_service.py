@@ -18,12 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class EmailReportService:
-    """邮件简报服务"""
+    """邮件简报服务 - 支持每天多次定时发送"""
+    
+    # 默认发送时间点：10:00 和 22:00
+    DEFAULT_SEND_TIMES = ['10:00', '22:00']
     
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
-        self._last_send_date: Optional[str] = None
+        self._sent_times: set = set()  # 记录已发送的时间点
     
     async def start(self):
         """启动邮件简报服务"""
@@ -86,36 +89,39 @@ class EmailReportService:
                 await self._send_report_for_user(config)
     
     async def _send_report_for_user(self, user_config):
-        """为单个用户发送简报"""
+        """为单个用户发送简报 - 支持每天多个时间点"""
         user_id = user_config['user_id']
         email = user_config['email']
-        report_time = user_config['email_report_time'] or '09:00'
         
-        # 检查当前时间是否到达发送时间
+        # 检查当前时间
         now = datetime.now()
         today_str = now.strftime('%Y-%m-%d')
+        current_hour = now.hour
         
-        # 如果今天已发送过，跳过
-        if self._last_send_date == today_str:
-            return
+        # 每天凌晨重置已发送记录
+        if not any(today_str in s for s in self._sent_times):
+            self._sent_times.clear()
         
-        # 解析发送时间
-        try:
-            hour, minute = map(int, report_time.split(':'))
-            target_time = time(hour, minute)
-            current_time = now.time()
-            
-            # 如果当前时间在目标时间前1小时内，发送简报
-            if current_time.hour == target_time.hour or (
-                current_time.hour == target_time.hour - 1 and current_time.minute >= 50
-            ):
-                # 生成并发送简报
-                report_content = await self._generate_report(user_id)
-                await self._send_email(email, report_content)
-                self._last_send_date = today_str
-                logger.info(f"✅ 已发送邮件简报到 {email}")
-        except Exception as e:
-            logger.error(f"发送邮件简报失败: {e}")
+        # 检查每个发送时间点
+        for send_time in self.DEFAULT_SEND_TIMES:
+            try:
+                hour, minute = map(int, send_time.split(':'))
+                time_key = f"{today_str}_{send_time}"
+                
+                # 如果这个时间点今天已发送，跳过
+                if time_key in self._sent_times:
+                    continue
+                
+                # 检查是否到达发送时间（允许1小时的窗口）
+                if current_hour == hour or (current_hour == hour + 1 and now.minute < 30):
+                    # 生成并发送简报
+                    report_content = await self._generate_report(user_id)
+                    await self._send_email(email, report_content, send_time)
+                    self._sent_times.add(time_key)
+                    logger.info(f"✅ 已发送 {send_time} 邮件简报到 {email}")
+                    
+            except Exception as e:
+                logger.error(f"发送邮件简报失败 ({send_time}): {e}")
     
     async def _generate_report(self, user_id: UUID) -> str:
         """生成简报内容"""
@@ -277,16 +283,16 @@ class EmailReportService:
         
         return html_content
     
-    async def _send_email(self, to_email: str, html_content: str):
+    async def _send_email(self, to_email: str, html_content: str, send_time: str = None):
         """发送邮件"""
-        # 从环境变量读取SMTP配置
-        smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-        smtp_port = int(os.getenv('SMTP_PORT', '587'))
-        smtp_user = os.getenv('SMTP_USER', '')
-        smtp_password = os.getenv('SMTP_PASSWORD', '')
+        # 从环境变量读取SMTP配置（默认使用QQ邮箱）
+        smtp_host = os.getenv('SMTP_HOST', 'smtp.qq.com')
+        smtp_port = int(os.getenv('SMTP_PORT', '465'))
+        smtp_user = os.getenv('SMTP_USER', '479729980@qq.com')
+        smtp_password = os.getenv('SMTP_PASSWORD', 'axbfpyqfctvnbjcj')
         smtp_from = os.getenv('SMTP_FROM', smtp_user)
         smtp_tls = os.getenv('SMTP_TLS', '0') == '1'
-        smtp_ssl = os.getenv('SMTP_SSL', '0') == '1'
+        smtp_ssl = os.getenv('SMTP_SSL', '1') == '1'  # QQ邮箱默认SSL
         smtp_timeout = int(os.getenv('SMTP_TIMEOUT', '30'))
         
         if not smtp_user or not smtp_password:
@@ -294,8 +300,9 @@ class EmailReportService:
             return
         
         # 创建邮件
+        time_label = f" ({send_time})" if send_time else ""
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = f'Inarbit 交易简报 - {datetime.now().strftime("%Y-%m-%d")}'
+        msg['Subject'] = f'Inarbit 交易简报 - {datetime.now().strftime("%Y-%m-%d")}{time_label}'
         msg['From'] = smtp_from
         msg['To'] = to_email
         
