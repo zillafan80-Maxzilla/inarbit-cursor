@@ -285,7 +285,9 @@ class EmailReportService:
         smtp_user = os.getenv('SMTP_USER', '')
         smtp_password = os.getenv('SMTP_PASSWORD', '')
         smtp_from = os.getenv('SMTP_FROM', smtp_user)
-        smtp_tls = os.getenv('SMTP_TLS', '1') == '1'
+        smtp_tls = os.getenv('SMTP_TLS', '0') == '1'
+        smtp_ssl = os.getenv('SMTP_SSL', '0') == '1'
+        smtp_timeout = int(os.getenv('SMTP_TIMEOUT', '30'))
         
         if not smtp_user or not smtp_password:
             logger.warning("SMTP未配置，跳过发送邮件")
@@ -303,11 +305,16 @@ class EmailReportService:
         
         # 发送邮件
         try:
-            if smtp_tls:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
+            if smtp_ssl:
+                # 使用SSL连接（QQ邮箱465端口）
+                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=smtp_timeout)
+            elif smtp_tls:
+                # 使用TLS连接（587端口）
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout)
                 server.starttls()
             else:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30)
+                # 普通连接
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout)
             
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
