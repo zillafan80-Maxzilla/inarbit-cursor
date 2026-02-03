@@ -24,6 +24,7 @@ try:
 except Exception:
     _MAX_TICKER_SYMBOLS = 200
 _EXPAND_USDT_MARKETS = (os.getenv("MARKETDATA_EXPAND_USDT_MARKETS", "0").strip().lower() in {"1", "true", "yes", "y"})
+_EXPAND_FUTURES_MARKETS = (os.getenv("MARKETDATA_EXPAND_FUTURES_MARKETS", "0").strip().lower() in {"1", "true", "yes", "y"})
 try:
     _MAX_ORDERBOOK_SYMBOLS = int(os.getenv("MARKETDATA_MAX_ORDERBOOK_SYMBOLS", "5").strip() or "5")
 except Exception:
@@ -206,14 +207,17 @@ class MarketDataService:
                             orderbook_symbols = (config_spot_symbols or spot_ticker_symbols)[:_MAX_ORDERBOOK_SYMBOLS]
                             await self._write_spot_orderbooks_to_redis(exchange_provider, spot, orderbook_symbols)
 
-                        futures_symbols = []
-                        if futures_markets_ok:
+                        futures_symbols = self._map_to_futures_symbols(futures, spot_ticker_symbols or [])
+                        if futures_markets_ok and _EXPAND_FUTURES_MARKETS:
                             fmarkets = getattr(futures, "markets", None) or {}
                             if fmarkets:
-                                futures_symbols = [s for s in fmarkets.keys() if s.endswith(":USDT")]
-                                futures_symbols.sort()
-                        if not futures_symbols:
-                            futures_symbols = self._map_to_futures_symbols(futures, spot_ticker_symbols or [])
+                                market_futures = [s for s in fmarkets.keys() if s.endswith(":USDT")]
+                                market_futures.sort()
+                                futures_symbols = self._merge_symbol_priority(
+                                    futures_symbols,
+                                    market_futures,
+                                    _MAX_FUTURES_TICKER_SYMBOLS,
+                                )
                         if not futures_markets_ok and not futures_symbols:
                             futures_symbols = [s for s in (spot_ticker_symbols or []) if s.endswith("/USDT")]
 
