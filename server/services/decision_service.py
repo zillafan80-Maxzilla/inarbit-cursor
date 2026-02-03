@@ -3,7 +3,7 @@ import json
 import logging
 import time
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Set
 from decimal import Decimal
 
@@ -784,13 +784,20 @@ class DecisionService:
                 weight_value = 1.0
             if weight_value <= 0:
                 continue
-            d.routing_weight = Decimal(str(weight_value))
-            d.regime = regime
+            routing_weight = Decimal(str(weight_value))
+            new_risk_score = d.risk_score
             try:
-                d.risk_score = (d.risk_score / Decimal(str(weight_value))).quantize(Decimal("0.0001"))
+                new_risk_score = (d.risk_score / routing_weight).quantize(Decimal("0.0001"))
             except Exception:
                 pass
-            routed.append(d)
+            routed.append(
+                replace(
+                    d,
+                    routing_weight=routing_weight,
+                    regime=regime,
+                    risk_score=new_risk_score,
+                )
+            )
 
         # 去重：同一币种只保留风险评分最低的
         best_by_symbol: Dict[str, Decision] = {}
