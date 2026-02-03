@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStrategies, useSignals } from '../api/hooks';
 import { botAPI, configAPI } from '../api/client';
+import { BotConsolePanel } from './BotConsole';
 
 const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) => {
     const isRunning = botStatus === 'running';
@@ -292,6 +293,21 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
                     </div>
                 </div>
 
+            </div>
+
+            {/* 机器人控制（合并原“机器人控制台”功能） */}
+            <div style={{ marginTop: '16px' }}>
+                <div className="page-header" style={{ marginBottom: '12px' }}>
+                    <div>
+                        <h2 className="page-title" style={{ fontSize: '14px' }}>机器人控制</h2>
+                        <p className="page-subtitle">策略/持仓/手动下单/收益（已合并原机器人控制台）</p>
+                    </div>
+                </div>
+                <div className="card">
+                    <div className="card-body" style={{ padding: '12px' }}>
+                        <BotConsolePanel embedded />
+                    </div>
+                </div>
             </div>
         </div>
     );

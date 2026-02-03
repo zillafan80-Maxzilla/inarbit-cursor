@@ -10,7 +10,9 @@ function safeJsonParse(text) {
   }
 }
 
-const BotConsole = () => {
+export const BotConsolePanel = ({
+  embedded = false,
+}) => {
   const [status, setStatus] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -176,22 +178,24 @@ const BotConsole = () => {
   };
 
   return (
-    <div className="content-body">
-      <div className="page-header" style={{ marginBottom: '16px' }}>
-        <div>
-          <h1 className="page-title">机器人控制台</h1>
-          <p className="page-subtitle">Bot 命令接口、策略开关、持仓与手动下单（模拟盘）</p>
+    <div>
+      {!embedded && (
+        <div className="page-header" style={{ marginBottom: '16px' }}>
+          <div>
+            <h1 className="page-title">机器人控制台</h1>
+            <p className="page-subtitle">Bot 命令接口、策略开关、持仓与手动下单（模拟盘）</p>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={loadAll} className="btn btn-secondary">🔄 刷新</button>
+            <button onClick={restart} className="btn btn-secondary" disabled={!isRunning}>🔄 重启</button>
+            {isRunning ? (
+              <button onClick={stop} className="btn btn-danger">🛑 停止</button>
+            ) : (
+              <button onClick={start} className="btn btn-primary">▶️ 启动</button>
+            )}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={loadAll} className="btn btn-secondary">🔄 刷新</button>
-          <button onClick={restart} className="btn btn-secondary" disabled={!isRunning}>🔄 重启</button>
-          {isRunning ? (
-            <button onClick={stop} className="btn btn-danger">🛑 停止</button>
-          ) : (
-            <button onClick={start} className="btn btn-primary">▶️ 启动</button>
-          )}
-        </div>
-      </div>
+      )}
 
       {loading && (
         <div className="loading">
@@ -205,26 +209,28 @@ const BotConsole = () => {
 
       {!loading && !error && (
         <>
-          <div className="stats-row" style={{ marginBottom: '12px' }}>
-            <div className="stat-box">
-              <div className="stat-label">状态</div>
-              <div className="stat-num" style={{ color: isRunning ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                {isRunning ? '运行中' : '已停止'}
+          {!embedded && (
+            <div className="stats-row" style={{ marginBottom: '12px' }}>
+              <div className="stat-box">
+                <div className="stat-label">状态</div>
+                <div className="stat-num" style={{ color: isRunning ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                  {isRunning ? '运行中' : '已停止'}
+                </div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">交易模式</div>
+                <div className="stat-num">{tradingMode === 'live' ? '🔴 实盘' : '🟢 模拟'}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">运行时间</div>
+                <div className="stat-num" style={{ fontFamily: 'monospace' }}>{uptimeText}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">启用策略数</div>
+                <div className="stat-num">{status?.data?.active_strategies ?? '-'}</div>
               </div>
             </div>
-            <div className="stat-box">
-              <div className="stat-label">交易模式</div>
-              <div className="stat-num">{tradingMode === 'live' ? '🔴 实盘' : '🟢 模拟'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-label">运行时间</div>
-              <div className="stat-num" style={{ fontFamily: 'monospace' }}>{uptimeText}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-label">启用策略数</div>
-              <div className="stat-num">{status?.data?.active_strategies ?? '-'}</div>
-            </div>
-          </div>
+          )}
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
             {[
@@ -245,6 +251,9 @@ const BotConsole = () => {
             <div style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>详细策略编辑请到</span>
               <Link to="/strategies" style={{ color: 'var(--cyan)', textDecoration: 'none', fontWeight: 700 }}>策略管理</Link>
+              {embedded && (
+                <button onClick={loadAll} className="btn btn-secondary btn-sm">🔄 刷新</button>
+              )}
             </div>
           </div>
 
@@ -504,6 +513,12 @@ const BotConsole = () => {
     </div>
   );
 };
+
+const BotConsole = () => (
+  <div className="content-body">
+    <BotConsolePanel embedded={false} />
+  </div>
+);
 
 export default BotConsole;
 

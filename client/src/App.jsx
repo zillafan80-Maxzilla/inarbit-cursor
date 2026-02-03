@@ -127,7 +127,6 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
     {
       title: '执行与调度',
       items: [
-        { path: '/bot', icon: '🤖', label: '机器人控制台' },
         { path: '/oms', icon: '🧩', label: '订单管理控制' },
         { path: '/scanners', icon: '🔍', label: '扫描器参数', adminOnly: true },
         { path: '/decision', icon: '🧠', label: '决策管理' },
@@ -359,7 +358,7 @@ function App() {
                 <Route path="/system" element={authed ? <SystemOverview /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 {/* OMS */}
-                <Route path="/bot" element={authed ? <BotConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/bot" element={authed ? <Navigate to="/control" replace /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms" element={authed ? <OmsConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms-config" element={authed ? <Navigate to="/oms" replace /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/scanners" element={authed ? <RequireAdmin><Scanners /></RequireAdmin> : <Login onLogin={(u) => setCurrentUser(u)} />} />
