@@ -126,7 +126,7 @@ const RealtimeOverview = () => {
         return (
             <div className="content-body" style={{ textAlign: 'center', padding: '2rem' }}>
                 <div style={{ fontSize: '1.5rem' }}>⏳</div>
-                <p style={{ color: 'var(--text-muted)', fontSize: '10px' }}>加载实时总览...</p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '10px' }}>加载收益总览...</p>
             </div>
         );
     }
@@ -144,8 +144,8 @@ const RealtimeOverview = () => {
         <div className="content-body">
             <div className="page-header" style={{ marginBottom: '16px' }}>
                 <div>
-                    <h1 className="page-title">实时总览</h1>
-                    <p className="page-subtitle">系统运行状态、资金收益与实时交易信息</p>
+                    <h1 className="page-title">收益总览</h1>
+                    <p className="page-subtitle">资金收益与核心运行状态（权益口径已统一）</p>
                 </div>
                 <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
                     最后更新: {currentTime.toLocaleString('zh-CN')}

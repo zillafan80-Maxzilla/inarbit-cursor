@@ -119,7 +119,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       title: '管理总览',
       items: [
         { path: '/admin', icon: '🗺️', label: '管理总览' },
-        { path: '/realtime', icon: '📊', label: '实时总览', showStatus: true },
+        { path: '/realtime', icon: '📊', label: '收益总览', showStatus: true },
         { path: '/control', icon: '🎛️', label: '控制面板' },
         { path: '/system', icon: '🧭', label: '系统概览' },
       ]

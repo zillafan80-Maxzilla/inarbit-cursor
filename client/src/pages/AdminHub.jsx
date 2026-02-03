@@ -5,7 +5,8 @@ const buildSections = (isAdmin) => ([
   {
     title: '系统与运行',
     items: [
-      { label: '控制面板', path: '/control', desc: '启动/停止、模式切换与运行状态' },
+      { label: '收益总览', path: '/realtime', desc: '资金收益与核心状态（统一口径）' },
+      { label: '控制面板', path: '/control', desc: '启停/模式/策略/持仓/手动下单' },
       { label: '系统概览', path: '/system', desc: '核心服务健康与统计' },
       { label: '运行日志', path: '/logs', desc: '系统运行日志与审计线索' },
     ],
@@ -23,9 +24,9 @@ const buildSections = (isAdmin) => ([
     title: '市场与资产',
     items: [
       { label: '实时价格', path: '/live-prices', desc: '行情与市场快照' },
-      { label: '收益展示', path: '/pnl', desc: '收益、费率与收益率' },
-      { label: '模拟持仓', path: '/portfolio', desc: '模拟盘资产与持仓' },
       { label: '交易所账户', path: '/live-assets', desc: '实盘账户资产概览' },
+      { label: '模拟持仓', path: '/portfolio', desc: '模拟盘资产与持仓（权益拆分）' },
+      { label: '收益展示', path: '/pnl', desc: '收益曲线、交易明细与费率' },
     ],
   },
   {
@@ -54,23 +55,25 @@ const AdminHub = ({ currentUser }) => {
 
   return (
     <div className="content-body">
-    <div className="page-header" style={{ marginBottom: '16px' }}>
+    <div className="page-header" style={{ marginBottom: '10px' }}>
       <div>
         <h1 className="page-title">管理总览</h1>
-        <p className="page-subtitle">统一入口与管理导航</p>
+        <p className="page-subtitle">统一入口与管理导航（紧凑布局）</p>
       </div>
     </div>
 
-    <div style={{ display: 'grid', gap: '10px' }}>
+    <div style={{ display: 'grid', gap: '8px' }}>
       {sections.map((section) => (
         <div key={section.title} className="card">
-          <div className="card-header"><span className="card-title">{section.title}</span></div>
-          <div className="card-body" style={{ padding: '10px' }}>
+          <div className="card-header" style={{ padding: '6px 10px' }}>
+            <span className="card-title" style={{ fontSize: '11px', lineHeight: 1.1 }}>{section.title}</span>
+          </div>
+          <div className="card-body" style={{ padding: '8px' }}>
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))',
-                gap: '8px',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
+                gap: '6px',
               }}
             >
               {section.items.map((item) => (
@@ -87,23 +90,23 @@ const AdminHub = ({ currentUser }) => {
                   <div
                     className="card-body"
                     style={{
-                      padding: '8px 9px',
+                      padding: '6px 8px',
                       width: '100%',
-                      minHeight: '54px',
+                      minHeight: '44px',
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'center',
-                      gap: '4px',
+                      gap: '3px',
                     }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: '11px', lineHeight: 1.2, color: 'var(--text-primary)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '10px', lineHeight: 1.1, color: 'var(--text-primary)' }}>
                       {item.label}
                     </div>
                     <div
                       style={{
-                        fontSize: '9px',
+                        fontSize: '8px',
                         color: 'var(--text-muted)',
-                        lineHeight: 1.2,
+                        lineHeight: 1.1,
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
