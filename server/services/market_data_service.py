@@ -23,6 +23,7 @@ try:
     _MAX_TICKER_SYMBOLS = int(os.getenv("MARKETDATA_MAX_TICKER_SYMBOLS", "200").strip() or "200")
 except Exception:
     _MAX_TICKER_SYMBOLS = 200
+_EXPAND_USDT_MARKETS = (os.getenv("MARKETDATA_EXPAND_USDT_MARKETS", "0").strip().lower() in {"1", "true", "yes", "y"})
 try:
     _MAX_ORDERBOOK_SYMBOLS = int(os.getenv("MARKETDATA_MAX_ORDERBOOK_SYMBOLS", "5").strip() or "5")
 except Exception:
@@ -164,7 +165,7 @@ class MarketDataService:
                         if spot_ticker_symbols:
                             spot_symbol_count = len(spot_ticker_symbols)
                             markets = getattr(spot, "markets", None) or {}
-                            if markets:
+                            if markets and _EXPAND_USDT_MARKETS:
                                 market_usdt = [s for s in markets.keys() if s.endswith("/USDT")]
                                 market_usdt.sort()
                                 spot_ticker_symbols = self._merge_symbol_priority(
