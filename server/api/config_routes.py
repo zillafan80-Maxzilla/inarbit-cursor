@@ -667,10 +667,19 @@ async def get_simulation_portfolio(user: CurrentUser = Depends(get_current_user)
                     ticker = await redis.hgetall(f"ticker_futures:{exchange_id}:{symbol}")
                 price = _price_from_ticker(ticker)
 
-            value = quantity * price if price is not None else None
             avg_price = _to_float(row["avg_price"]) if row["avg_price"] is not None else None
+            unrealized = None
             if price is not None and avg_price is not None:
-                unrealized_pnl_rt += (price - avg_price) * quantity
+                unrealized = (price - avg_price) * quantity
+                unrealized_pnl_rt += unrealized
+
+            # 估值口径：
+            # - spot: 资产市值 = 数量 * 现价（可为负表示借贷/做空）
+            # - perp: 仓位“价值”按浮动盈亏计算，避免把名义本金计入权益导致翻倍
+            if account_type == "perp":
+                value = unrealized
+            else:
+                value = quantity * price if price is not None else None
 
             asset = {
                 "coin": instrument,
