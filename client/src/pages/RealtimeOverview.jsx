@@ -2,9 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { configAPI, exchangeV2API, omsAPI, systemAPI } from '../api/client';
 
-const formatMoney = (value, currency = 'USDT') => {
+const formatAbsMoney = (value, currency = 'USDT') => {
     const num = Number(value || 0);
-    return `${currency}$${num.toFixed(2)}`;
+    return `${currency}$${Math.abs(num).toFixed(2)}`;
+};
+
+const formatSignedMoney = (value, currency = 'USDT') => {
+    const num = Number(value || 0);
+    const sign = num > 0 ? '+' : num < 0 ? '-' : '';
+    return `${sign}${currency}$${Math.abs(num).toFixed(2)}`;
 };
 
 const RealtimeOverview = () => {
@@ -113,6 +119,33 @@ const RealtimeOverview = () => {
     const realizedPnL = Number(simSummary.realizedPnL ?? 0);
     const netProfit = totalEquity - initialBalance;
 
+    const exchanges = Array.isArray(simPortfolio?.exchanges) ? simPortfolio.exchanges : [];
+    const assets = exchanges.flatMap((ex) => Array.isArray(ex?.assets) ? ex.assets : []);
+    const exposureAssets = assets.filter((a) => {
+        const coin = String(a?.coin || '').toUpperCase();
+        const qc = String(quoteCurrency || 'USDT').toUpperCase();
+        return coin && coin !== qc;
+    });
+    const spotAssets = exposureAssets.filter((a) => String(a?.account_type || 'spot').toLowerCase() !== 'perp');
+    const perpAssets = exposureAssets.filter((a) => String(a?.account_type || '').toLowerCase() === 'perp');
+
+    const sum = (rows, pick) => rows.reduce((acc, r) => {
+        const v = Number(pick(r));
+        return acc + (Number.isFinite(v) ? v : 0);
+    }, 0);
+
+    const spotLongValue = sum(spotAssets, (a) => (Number(a?.quantity || 0) > 0 ? a?.value : 0));
+    const spotShortValue = sum(spotAssets, (a) => (Number(a?.quantity || 0) < 0 ? a?.value : 0)); // 通常为负
+    const spotShortNotionalAbs = Math.abs(spotShortValue);
+
+    const perpUnrealizedValue = sum(perpAssets, (a) => a?.value); // perp 口径：value=浮盈亏
+    const perpNotionalAbs = sum(perpAssets, (a) => {
+        const qty = Number(a?.quantity || 0);
+        const px = Number(a?.price);
+        if (!Number.isFinite(qty) || !Number.isFinite(px)) return 0;
+        return Math.abs(qty * px);
+    });
+
     const tradingMode = summary.trading_mode || 'paper';
     const botStatus = summary.bot_status || 'stopped';
     const activeStrategies = Array.isArray(summary.strategies) ? summary.strategies : [];
@@ -175,7 +208,7 @@ const RealtimeOverview = () => {
                 <div className="stat-box">
                     <div className="stat-label">初始资金</div>
                     <div className="stat-num" style={{ fontSize: '13px' }}>
-                        {formatMoney(initialBalance, quoteCurrency)}
+                        {formatAbsMoney(initialBalance, quoteCurrency)}
                     </div>
                 </div>
             </div>
@@ -184,13 +217,13 @@ const RealtimeOverview = () => {
                 <div className="stat-box">
                     <div className="stat-label">总权益（模拟盘）</div>
                     <div className="stat-num" style={{ fontSize: '13px' }}>
-                        {formatMoney(totalEquity, quoteCurrency)}
+                        {formatAbsMoney(totalEquity, quoteCurrency)}
                     </div>
                 </div>
                 <div className="stat-box">
                     <div className="stat-label">权益变化</div>
                     <div className="stat-num" style={{ fontSize: '13px', color: netProfit >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>
-                        {netProfit >= 0 ? '+' : ''}{formatMoney(Math.abs(netProfit), quoteCurrency)}
+                        {formatSignedMoney(netProfit, quoteCurrency)}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         收益率: {initialBalance > 0 ? ((netProfit / initialBalance) * 100).toFixed(2) : 0}%
@@ -214,21 +247,44 @@ const RealtimeOverview = () => {
                 <div className="stat-box">
                     <div className="stat-label">现金余额</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
-                        {formatMoney(cashBalance, quoteCurrency)}
+                        {formatAbsMoney(cashBalance, quoteCurrency)}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         说明：此处为模拟盘现金（可能包含对冲/卖出所得），并非总权益
                     </div>
+                    {(spotShortNotionalAbs > 0.01 || perpNotionalAbs > 0.01) && (
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.2 }}>
+                            {spotShortNotionalAbs > 0.01 && (
+                                <div>
+                                    空头卖出所得（名义）≈ +{formatAbsMoney(spotShortNotionalAbs, quoteCurrency)}
+                                    （对应仓位估值为负）
+                                </div>
+                            )}
+                            {perpNotionalAbs > 0.01 && (
+                                <div>
+                                    合约名义金额（展示）≈ {formatAbsMoney(perpNotionalAbs, quoteCurrency)}
+                                    ，合约浮盈亏（计入权益）≈ {formatSignedMoney(perpUnrealizedValue, quoteCurrency)}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="stat-box">
                     <div className="stat-label">仓位估值</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
-                        {formatMoney(positionsValue, quoteCurrency)}
+                        {formatSignedMoney(positionsValue, quoteCurrency)}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                        未实现盈亏: {unrealizedPnL >= 0 ? '+' : ''}{formatMoney(Math.abs(unrealizedPnL), quoteCurrency)}
-                        ，已实现盈亏: {realizedPnL >= 0 ? '+' : ''}{formatMoney(Math.abs(realizedPnL), quoteCurrency)}
+                        未实现盈亏: {formatSignedMoney(unrealizedPnL, quoteCurrency)}
+                        ，已实现盈亏: {formatSignedMoney(realizedPnL, quoteCurrency)}
                     </div>
+                    {(spotLongValue > 0.01 || spotShortNotionalAbs > 0.01 || perpAssets.length) && (
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.2 }}>
+                            {spotLongValue > 0.01 && <div>现货多头估值 ≈ {formatAbsMoney(spotLongValue, quoteCurrency)}</div>}
+                            {spotShortNotionalAbs > 0.01 && <div>现货空头估值 ≈ -{formatAbsMoney(spotShortNotionalAbs, quoteCurrency)}</div>}
+                            {perpAssets.length > 0 && <div>合约部分：仅计入浮盈亏（不计名义本金）</div>}
+                        </div>
+                    )}
                 </div>
                 <div className="stat-box">
                     <div className="stat-label">OMS 累计收益（模拟）</div>
