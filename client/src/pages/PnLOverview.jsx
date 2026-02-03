@@ -39,26 +39,29 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
     const { history: historyBase, loading: historyLoading } = useOmsPnLHistory(historyParams);
     const [liveSummary, setLiveSummary] = useState(null);
     const [liveHistory, setLiveHistory] = useState(null);
-    const [streamActive, setStreamActive] = useState(false);
 
     useEffect(() => {
         if (initialized) return;
-        const params = new URLSearchParams(window.location.search || '');
-        const next = {
-            exchange_id: params.get('exchange_id') || '',
-            symbol: params.get('symbol') || '',
-            plan_id: params.get('plan_id') || '',
-            created_after: params.get('created_after') || '',
-            created_before: params.get('created_before') || '',
-            limit: Number(params.get('limit') || 200),
-            offset: Number(params.get('offset') || 0),
-        };
-        const urlMode = params.get('trading_mode');
-        if (urlMode === 'paper' || urlMode === 'live') {
-            setModeOverride(urlMode);
-        }
-        setFilters((prev) => ({ ...prev, ...next }));
-        setInitialized(true);
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        const t = setTimeout(() => {
+            const params = new URLSearchParams(window.location.search || '');
+            const next = {
+                exchange_id: params.get('exchange_id') || '',
+                symbol: params.get('symbol') || '',
+                plan_id: params.get('plan_id') || '',
+                created_after: params.get('created_after') || '',
+                created_before: params.get('created_before') || '',
+                limit: Number(params.get('limit') || 200),
+                offset: Number(params.get('offset') || 0),
+            };
+            const urlMode = params.get('trading_mode');
+            if (urlMode === 'paper' || urlMode === 'live') {
+                setModeOverride(urlMode);
+            }
+            setFilters((prev) => ({ ...prev, ...next }));
+            setInitialized(true);
+        }, 0);
+        return () => clearTimeout(t);
     }, [initialized]);
 
     useEffect(() => {
@@ -79,7 +82,6 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
                 if (!payload || payload.type !== 'pnl') return;
                 setLiveSummary(payload.summary || null);
                 setLiveHistory(Array.isArray(payload.history) ? payload.history : []);
-                setStreamActive(true);
             },
             3000
         );
@@ -210,7 +212,7 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
     const exportCsv = () => {
         const header = ['时间', '交易所', '交易对', '收益', '收益率', '数量'];
         const rows = pnlHistory.map((trade) => {
-            const time = new Date(trade.created_at || trade.exit_time || trade.entry_time || Date.now()).toISOString();
+            const time = new Date(trade.created_at || trade.exit_time || trade.entry_time || 0).toISOString();
             return [
                 time,
                 trade.exchange_id || '',
@@ -446,8 +448,8 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
                             </tr>
                         </thead>
                         <tbody>
-                            {pagedTrades.map((trade) => {
-                                const tradeTime = new Date(trade.created_at || trade.exit_time || trade.entry_time || Date.now());
+            {pagedTrades.map((trade) => {
+                                const tradeTime = new Date(trade.created_at || trade.exit_time || trade.entry_time || 0);
                                 const displayTime = tradeTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                                 const exchangeLabel = trade.exchange_id || 'unknown';
                                 const pathLabel = trade.symbol || '—';

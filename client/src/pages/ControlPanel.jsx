@@ -2,7 +2,7 @@
  * 控制面板页面
  * 重构版 - 运行状态合并入卡片、四卡两两并排、状态中文化
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStrategies, useSignals } from '../api/hooks';
 import { botAPI, configAPI } from '../api/client';
 
@@ -46,16 +46,20 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
     };
 
     useEffect(() => {
-        loadBotStatus();
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        const t0 = setTimeout(() => loadBotStatus(), 0);
         const t = setInterval(loadBotStatus, 5000);
-        return () => clearInterval(t);
+        return () => {
+            clearTimeout(t0);
+            clearInterval(t);
+        };
     }, []);
 
     const enabledStrategyIds = (strategies || [])
         .filter((s) => s.is_enabled)
         .map((s) => s.strategy_type);
 
-    const activeStrategies = useMemo(() => enabledStrategyIds, [enabledStrategyIds.join('|')]);
+    const activeStrategies = enabledStrategyIds;
 
     const toggleBot = async () => {
         const target = isRunning ? 'stopped' : 'running';

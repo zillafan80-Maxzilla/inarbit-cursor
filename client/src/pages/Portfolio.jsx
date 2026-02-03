@@ -2,7 +2,7 @@
  * 模拟持仓页面
  * 重构版 - 按交易所分组显示，与实盘持仓样式一致
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import { useConnectedExchanges } from '../api/hooks';
 import { configAPI } from '../api/client';

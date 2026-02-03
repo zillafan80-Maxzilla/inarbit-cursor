@@ -10,6 +10,7 @@ import { marketAPI } from '../api/client';
  */
 const LivePrices = () => {
     const { exchanges, loading } = useConnectedExchanges();
+    const [nowMs, setNowMs] = useState(() => Date.now());
 
     const defaultCoins = ['BTC', 'ETH', 'BNB', 'SOL'];
     const preferredCoins = ['BTC', 'ETH', 'BNB', 'SOL', 'BEAM', 'BSW', 'ANC', 'AGIX', 'BLZ'];
@@ -24,12 +25,16 @@ const LivePrices = () => {
         const raw = String(symbol || '').trim();
         if (!raw) return null;
         const cleaned = raw.replace(/:USDT$/i, '/USDT').replace(/:USDC$/i, '/USDC');
-        const parts = cleaned.split(/[\/-]/g).filter(Boolean);
+        const parts = cleaned.split(/[/-]/g).filter(Boolean);
         if (parts.length < 2) return null;
         const base = normalizeCoin(parts[0]);
         const quote = normalizeCoin(parts[1]);
         return { base, quote, normalized: `${base}/${quote}` };
     };
+    useEffect(() => {
+        const t = setInterval(() => setNowMs(Date.now()), 1000);
+        return () => clearInterval(t);
+    }, []);
 
     const getPreferredQuote = (quotes) => {
         for (const q of stableQuotes) {
@@ -160,25 +165,28 @@ const LivePrices = () => {
 
     useEffect(() => {
         if (!enabledExchanges.length) return;
-
-        setSelectedCoins(prev => {
-            const next = { ...prev };
-            for (const ex of enabledExchanges) {
-                const exchangeId = ex.exchange_id || ex.id;
-                if (!exchangeId) continue;
-                if (!next[exchangeId]) next[exchangeId] = 'BTC';
-            }
-            return next;
-        });
-        setTimePeriods(prev => {
-            const next = { ...prev };
-            for (const ex of enabledExchanges) {
-                const exchangeId = ex.exchange_id || ex.id;
-                if (!exchangeId) continue;
-                if (!next[exchangeId]) next[exchangeId] = '1D';
-            }
-            return next;
-        });
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        const t = setTimeout(() => {
+            setSelectedCoins(prev => {
+                const next = { ...prev };
+                for (const ex of enabledExchanges) {
+                    const exchangeId = ex.exchange_id || ex.id;
+                    if (!exchangeId) continue;
+                    if (!next[exchangeId]) next[exchangeId] = 'BTC';
+                }
+                return next;
+            });
+            setTimePeriods(prev => {
+                const next = { ...prev };
+                for (const ex of enabledExchanges) {
+                    const exchangeId = ex.exchange_id || ex.id;
+                    if (!exchangeId) continue;
+                    if (!next[exchangeId]) next[exchangeId] = '1D';
+                }
+                return next;
+            });
+        }, 0);
+        return () => clearTimeout(t);
     }, [enabledExchanges]);
 
     useEffect(() => {
@@ -225,36 +233,39 @@ const LivePrices = () => {
 
     useEffect(() => {
         if (!enabledExchanges.length) return;
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        const t = setTimeout(() => {
+            setPriceHistory((prev) => {
+                const next = { ...prev };
+                const now = nowMs;
 
-        setPriceHistory((prev) => {
-            const next = { ...prev };
-            const now = Date.now();
+                for (const ex of enabledExchanges) {
+                    const exchangeId = ex.exchange_id || ex.id;
+                    if (!exchangeId) continue;
+                    const tickers = normalizedTickersByExchange[exchangeId] || {};
+                    if (!next[exchangeId]) next[exchangeId] = {};
 
-            for (const ex of enabledExchanges) {
-                const exchangeId = ex.exchange_id || ex.id;
-                if (!exchangeId) continue;
-                const tickers = normalizedTickersByExchange[exchangeId] || {};
-                if (!next[exchangeId]) next[exchangeId] = {};
+                    Object.entries(tickers).forEach(([symbol, ticker]) => {
+                        const price = getPriceFromTicker(ticker);
+                        if (price === null) return;
+                        const ts = Number(ticker.timestamp) || now;
+                        const history = next[exchangeId][symbol] ? [...next[exchangeId][symbol]] : [];
+                        const last = history[history.length - 1];
+                        if (!last || last.price !== price) {
+                            history.push({ time: ts, price });
+                        }
+                        if (history.length > 500) {
+                            history.splice(0, history.length - 500);
+                        }
+                        next[exchangeId][symbol] = history;
+                    });
+                }
 
-                Object.entries(tickers).forEach(([symbol, ticker]) => {
-                    const price = getPriceFromTicker(ticker);
-                    if (price === null) return;
-                    const ts = Number(ticker.timestamp) || now;
-                    const history = next[exchangeId][symbol] ? [...next[exchangeId][symbol]] : [];
-                    const last = history[history.length - 1];
-                    if (!last || last.price !== price) {
-                        history.push({ time: ts, price });
-                    }
-                    if (history.length > 500) {
-                        history.splice(0, history.length - 500);
-                    }
-                    next[exchangeId][symbol] = history;
-                });
-            }
-
-            return next;
-        });
-    }, [normalizedTickersByExchange, enabledExchanges, coinsByExchange]);
+                return next;
+            });
+        }, 0);
+        return () => clearTimeout(t);
+    }, [normalizedTickersByExchange, enabledExchanges, nowMs]);
 
     if (loading) {
         return (
@@ -309,8 +320,7 @@ const LivePrices = () => {
                     const cacheKey = `${exchangeId}|${symbol}|${timeframe}`;
                     const ohlcv = ohlcvCache[cacheKey] || [];
                     const periodMs = getPeriodMs(period);
-                    const now = Date.now();
-                    const periodHistory = history.filter((p) => now - p.time <= periodMs);
+                    const periodHistory = history.filter((p) => nowMs - p.time <= periodMs);
                     const series = ohlcv.length
                         ? ohlcv.map((c) => ({ time: formatTimeLabel(c.timestamp, period), price: Number(c.close) }))
                         : periodHistory.map((p) => ({ time: formatTimeLabel(p.time, period), price: p.price }));

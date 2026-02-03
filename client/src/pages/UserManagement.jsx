@@ -1,22 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
-import { authAPI, setAuthToken } from '../api/client';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-
-const fetchAPI = async (path, options = {}) => {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`,
-      'Content-Type': 'application/json',
-      ...options.headers
-    }
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-};
+import { authAPI, setAuthToken, userAPI } from '../api/client';
 
 /**
  * 用户管理页面
@@ -64,7 +49,7 @@ const UserManagement = () => {
         
         const loadEmailConfig = async () => {
             try {
-                const data = await fetchAPI('/api/v1/user/email-report/config');
+                const data = await userAPI.getEmailReportConfig();
                 if (!mounted) return;
                 setEmailConfig(data);
             } catch (e) {
@@ -95,10 +80,7 @@ const UserManagement = () => {
         setEmailSaving(true);
         setEmailMessage('');
         try {
-            await fetchAPI('/api/v1/user/email-report/config', {
-                method: 'POST',
-                body: JSON.stringify(emailConfig)
-            });
+            await userAPI.updateEmailReportConfig(emailConfig);
             setEmailMessage('✅ 邮件简报配置已保存');
             setTimeout(() => setEmailMessage(''), 3000);
         } catch (error) {
@@ -112,9 +94,7 @@ const UserManagement = () => {
         setSendingTest(true);
         setEmailMessage('');
         try {
-            const result = await fetchAPI('/api/v1/user/email-report/test', {
-                method: 'POST'
-            });
+            const result = await userAPI.testEmailReport();
             setEmailMessage('✅ ' + result.message);
         } catch (error) {
             setEmailMessage('❌ 发送失败: ' + error.message);
@@ -147,6 +127,7 @@ const UserManagement = () => {
         try {
             await authAPI.logout();
         } catch {
+            // ignore
         }
         setAuthToken(null);
         localStorage.removeItem('inarbit_user');

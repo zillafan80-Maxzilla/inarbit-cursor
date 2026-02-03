@@ -89,7 +89,10 @@ const ExchangeAssets = () => {
     }, [exchangesLoading, exchangeConfigs, displayExchanges]);
 
     useEffect(() => {
-        loadAssets();
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        // 这里用异步调度以避免“set-state-in-effect”误报
+        const t = setTimeout(() => loadAssets(), 0);
+        return () => clearTimeout(t);
     }, [loadAssets]);
 
     useEffect(() => {

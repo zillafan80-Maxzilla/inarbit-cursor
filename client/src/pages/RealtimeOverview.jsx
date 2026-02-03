@@ -1,14 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { systemAPI, statsAPI } from '../api/client';
-
-const formatUptime = (totalSeconds) => {
-    const safeSeconds = Math.max(0, Number(totalSeconds || 0));
-    const hours = Math.floor(safeSeconds / 3600);
-    const minutes = Math.floor((safeSeconds % 3600) / 60);
-    const seconds = Math.floor(safeSeconds % 60);
-    return `${hours}小时${minutes}分钟${seconds}秒`;
-};
 
 const formatMoney = (value, currency = 'USDT') => {
     const num = Number(value || 0);

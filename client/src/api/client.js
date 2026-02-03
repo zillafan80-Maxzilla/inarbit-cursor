@@ -80,6 +80,19 @@ export const authAPI = {
 };
 
 // ============================================
+// 用户相关 API
+// ============================================
+
+export const userAPI = {
+    getEmailReportConfig: () => fetchAPI('/user/email-report/config'),
+    updateEmailReportConfig: (payload) => fetchAPI('/user/email-report/config', {
+        method: 'POST',
+        body: JSON.stringify(payload || {}),
+    }),
+    testEmailReport: () => fetchAPI('/user/email-report/test', { method: 'POST' }),
+};
+
+// ============================================
 // 交易所 API
 // ============================================
 

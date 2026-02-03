@@ -114,7 +114,7 @@ const Strategies = () => {
         try {
             const res = await systemAPI.metrics();
             setRegimeMetrics(res?.data?.market_regime || null);
-        } catch (err) {
+        } catch {
             setRegimeMetrics(null);
         }
     };

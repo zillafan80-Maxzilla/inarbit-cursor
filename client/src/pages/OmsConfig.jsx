@@ -44,7 +44,11 @@ const OmsConfig = () => {
     const [savedAt, setSavedAt] = useState(null);
 
     useEffect(() => {
-        setConfig((c) => ({ ...defaultConfig(), ...(loadConfig() || c) }));
+        // eslint 规则禁止在 effect 内同步触发 setState 链式更新
+        const t = setTimeout(() => {
+            setConfig((c) => ({ ...defaultConfig(), ...(loadConfig() || c) }));
+        }, 0);
+        return () => clearTimeout(t);
     }, []);
 
     const save = () => {

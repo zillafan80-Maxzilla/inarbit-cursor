@@ -5,7 +5,8 @@
 import React, { useEffect, useState } from 'react';
 import { configAPI, systemAPI } from '../api/client';
 
-const Settings = () => {
+const Settings = ({ currentUser }) => {
+    const isAdmin = (currentUser?.role === 'admin');
     const [config, setConfig] = useState({
         tradingMode: 'paper',
         defaultStrategy: 'triangular',
@@ -95,7 +96,6 @@ const Settings = () => {
             await systemAPI.reset({
                 confirm: true,
                 initial_capital: 1000,
-                new_admin_password: 'admin123'
             });
             alert('系统已重置，请重新登录');
             localStorage.removeItem('inarbit_token');
@@ -239,47 +239,62 @@ const Settings = () => {
             </div>
 
             {/* 系统重置 - 红色警告区域 */}
-            <div style={{
-                padding: '16px',
-                background: 'rgba(220, 50, 47, 0.08)',
-                borderRadius: '8px',
-                border: '1px solid rgba(220, 50, 47, 0.3)',
-                borderLeft: '3px solid var(--color-danger)'
-            }}>
-                <h3 style={{
-                    fontSize: '12px',
-                    color: 'var(--color-danger)',
-                    marginBottom: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
+            {isAdmin ? (
+                <div style={{
+                    padding: '16px',
+                    background: 'rgba(220, 50, 47, 0.08)',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(220, 50, 47, 0.3)',
+                    borderLeft: '3px solid var(--color-danger)'
                 }}>
-                    ⚠️ 危险区域
-                </h3>
-                <p style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                    系统重置将清空所有配置数据（交易所密钥、策略配置、模拟盘数据等），此操作不可恢复。
-                </p>
-                <button
-                    onClick={handleSystemReset}
-                    disabled={resetting}
-                    style={{
-                        padding: '8px 16px',
-                        background: resetting ? '#ccc' : 'var(--color-danger)',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        cursor: resetting ? 'wait' : 'pointer',
+                    <h3 style={{
+                        fontSize: '12px',
+                        color: 'var(--color-danger)',
+                        marginBottom: '8px',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '6px'
-                    }}
-                >
-                    {resetting ? '重置中...' : '🗑️ 初始化系统'}
-                </button>
-            </div>
+                    }}>
+                        ⚠️ 危险区域（管理员）
+                    </h3>
+                    <p style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                        系统重置将清空所有配置数据（交易所密钥、策略配置、模拟盘数据等），此操作不可恢复。
+                    </p>
+                    <button
+                        onClick={handleSystemReset}
+                        disabled={resetting}
+                        style={{
+                            padding: '8px 16px',
+                            background: resetting ? '#ccc' : 'var(--color-danger)',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: resetting ? 'wait' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                        }}
+                    >
+                        {resetting ? '重置中...' : '🗑️ 初始化系统'}
+                    </button>
+                </div>
+            ) : (
+                <div style={{
+                    padding: '12px',
+                    background: 'rgba(0, 0, 0, 0.02)',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(0,0,0,0.06)',
+                }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, marginBottom: '6px' }}>危险操作（仅管理员可见）</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        系统重置/审计等高危功能仅对管理员开放。
+                    </div>
+                </div>
+            )}
 
+            {isAdmin && (
             <div className="stat-box" style={{ padding: '12px', marginTop: '16px' }}>
                 <h3 style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.05)', paddingBottom: '6px' }}>
                     实盘开关审计
@@ -321,6 +336,7 @@ const Settings = () => {
                     </div>
                 )}
             </div>
+            )}
         </div>
     );
 };

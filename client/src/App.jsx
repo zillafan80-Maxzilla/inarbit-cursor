@@ -32,7 +32,7 @@ import OmsConfig from './pages/OmsConfig'
 import BotConsole from './pages/BotConsole'
 import Scanners from './pages/Scanners'
 
-import { getAuthToken, configAPI } from './api/client'
+import { getAuthToken, configAPI, authAPI, setAuthToken } from './api/client'
 
 import './App.css'
 
@@ -75,6 +75,7 @@ const GlobalFooter = () => (
 const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
   const location = useLocation();
   const isActive = (path) => location.pathname === path ? 'active' : '';
+  const isAdmin = currentUser?.role === 'admin';
   
   // 侧边栏宽度拖动调整
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -130,7 +131,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
         { path: '/bot', icon: '🤖', label: '机器人控制台' },
         { path: '/oms', icon: '🧩', label: '订单管理控制台' },
         { path: '/oms-config', icon: '🧰', label: '订单管理参数' },
-        { path: '/scanners', icon: '🔍', label: '扫描器参数' },
+        { path: '/scanners', icon: '🔍', label: '扫描器参数', adminOnly: true },
         { path: '/decision', icon: '🧠', label: '决策管理' },
         { path: '/arbitrage', icon: '🧪', label: '套利机会' },
       ]
@@ -156,7 +157,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
     {
       title: '风险与权限',
       items: [
-        { path: '/risk', icon: '🛡️', label: '风险监控' },
+        { path: '/risk', icon: '🛡️', label: '风险监控', adminOnly: true },
         { path: '/settings', icon: '⚙️', label: '全局设置' },
         { path: '/sim-config', icon: '⚙️', label: '模拟配置' },
         { path: '/logs', icon: '📋', label: '运行日志' },
@@ -164,6 +165,13 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       ]
     },
   ];
+
+  const visibleMenuGroups = menuGroups
+    .map((group) => ({
+      ...group,
+      items: (group.items || []).filter((item) => !item.adminOnly || isAdmin),
+    }))
+    .filter((group) => (group.items || []).length > 0);
 
   return (
     <aside className="sidebar" style={{ width: `${sidebarWidth}px`, position: 'relative' }}>
@@ -178,7 +186,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
 
       {/* 导航菜单 */}
       <nav className="sidebar-nav">
-        {menuGroups.map((group, groupIndex) => (
+        {visibleMenuGroups.map((group, groupIndex) => (
           <div key={groupIndex} className="nav-group">
             <div className="nav-group-title">
               {group.title}
@@ -195,6 +203,9 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
                   )}
                   <span className="nav-icon">{item.icon}</span>
                   <span>{item.label}</span>
+                  {item.adminOnly && (
+                    <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>Admin</span>
+                  )}
                 </Link>
               ))}
             </div>
@@ -233,6 +244,39 @@ function App() {
   });
   const [liveEnabled, setLiveEnabled] = useState(false);
   const authed = !!getAuthToken();
+  const isAdmin = currentUser?.role === 'admin';
+
+  const RequireAdmin = ({ children }) => {
+    if (authed && !currentUser) {
+      return (
+        <div className="content-body">
+          <div className="stat-box" style={{ padding: '12px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>加载用户信息...</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              正在确认管理员权限，请稍候。
+            </div>
+          </div>
+        </div>
+      );
+    }
+    if (isAdmin) return children;
+    return (
+      <div className="content-body">
+        <div className="page-header" style={{ marginBottom: '16px' }}>
+          <div>
+            <h1 className="page-title">需要管理员权限</h1>
+            <p className="page-subtitle">当前账户无权限访问此页面</p>
+          </div>
+        </div>
+        <div className="stat-box" style={{ padding: '12px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>访问被拒绝</div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            请使用管理员账号登录后再访问，或联系管理员为当前账号授予权限。
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (!getAuthToken()) return;
@@ -253,6 +297,30 @@ function App() {
     return () => { mounted = false; };
   }, [authed]);
 
+  useEffect(() => {
+    if (!getAuthToken()) return;
+    let mounted = true;
+    const loadUser = async () => {
+      try {
+        const res = await authAPI.me();
+        const user = res?.user || null;
+        if (!mounted) return;
+        setCurrentUser(user);
+        if (user) {
+          localStorage.setItem('inarbit_user', JSON.stringify(user));
+        }
+      } catch {
+        // token 可能已过期，保持 UI 可用但不强制跳转
+        if (!mounted) return;
+        setCurrentUser(null);
+        setAuthToken(null);
+        localStorage.removeItem('inarbit_user');
+      }
+    };
+    loadUser();
+    return () => { mounted = false; };
+  }, [authed]);
+
 
   return (
     <Router>
@@ -267,7 +335,7 @@ function App() {
           <main className="main-layout">
               <Routes>
                 <Route path="/login" element={<Login onLogin={(u) => setCurrentUser(u)} />} />
-                <Route path="/admin" element={authed ? <AdminHub /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/admin" element={authed ? <AdminHub currentUser={currentUser} /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 <Route path="/" element={
                   authed ? (
@@ -296,7 +364,7 @@ function App() {
                 <Route path="/bot" element={authed ? <BotConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms" element={authed ? <OmsConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms-config" element={authed ? <OmsConfig /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
-                <Route path="/scanners" element={authed ? <Scanners /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/scanners" element={authed ? <RequireAdmin><Scanners /></RequireAdmin> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/decision" element={authed ? <DecisionConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/arbitrage" element={authed ? <ArbitrageMonitor /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
@@ -319,8 +387,8 @@ function App() {
                 <Route path="/exchanges" element={authed ? <ExchangeManagement /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/exchange-pairs" element={authed ? <ExchangePairs /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/config-catalog" element={authed ? <ConfigCatalog /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
-                <Route path="/settings" element={authed ? <Settings /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
-                <Route path="/risk" element={authed ? <RiskDashboard /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/settings" element={authed ? <Settings currentUser={currentUser} /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/risk" element={authed ? <RequireAdmin><RiskDashboard /></RequireAdmin> : <Login onLogin={(u) => setCurrentUser(u)} />} />
               </Routes>
           </main>
         </div>

@@ -10,7 +10,6 @@ const RiskDashboard = () => {
   const [tradingEnabled, setTradingEnabled] = useState(true);
   const [riskStatus, setRiskStatus] = useState({});
   const [systemMetrics, setSystemMetrics] = useState(null);
-  const [riskConfig, setRiskConfig] = useState(null);
   const [riskConfigPath, setRiskConfigPath] = useState('');
   const [riskConfigDraft, setRiskConfigDraft] = useState('{}');
   const [riskConfigPersist, setRiskConfigPersist] = useState(true);
@@ -93,7 +92,6 @@ const RiskDashboard = () => {
       setSystemMetrics(metrics?.data || metrics || null);
       try {
         const cfg = await riskAPI.getConfig();
-        setRiskConfig(cfg?.config || null);
         setRiskConfigPath(cfg?.path || '');
         setRiskConfigDraft(JSON.stringify(cfg?.config || {}, null, 2));
       } catch {
@@ -145,8 +143,7 @@ const RiskDashboard = () => {
     }
     setRiskConfigSaving(true);
     try {
-      const resp = await riskAPI.updateConfig({ config: parsed, persist: !!riskConfigPersist });
-      setRiskConfig(resp?.config || parsed);
+      await riskAPI.updateConfig({ config: parsed, persist: !!riskConfigPersist });
       alert('风险配置已更新');
       await fetchStatus();
     } catch (err) {
