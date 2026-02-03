@@ -370,7 +370,7 @@ const Strategies = () => {
                                             alignItems: 'center',
                                             gap: '6px'
                                         }}>
-                                            {strategy.name || typeInfo.name}
+                                            {typeInfo.name || strategy.name || strategy.strategy_type}
                                             <span style={{
                                                 fontSize: '8px',
                                                 padding: '2px 6px',

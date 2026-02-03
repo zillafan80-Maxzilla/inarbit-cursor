@@ -137,6 +137,7 @@ const RealtimeOverview = () => {
     const spotLongValue = sum(spotAssets, (a) => (Number(a?.quantity || 0) > 0 ? a?.value : 0));
     const spotShortValue = sum(spotAssets, (a) => (Number(a?.quantity || 0) < 0 ? a?.value : 0)); // 通常为负
     const spotShortNotionalAbs = Math.abs(spotShortValue);
+    const spotNetValue = sum(spotAssets, (a) => a?.value);
 
     const perpUnrealizedValue = sum(perpAssets, (a) => a?.value); // perp 口径：value=浮盈亏
     const perpNotionalAbs = sum(perpAssets, (a) => {
@@ -146,9 +147,32 @@ const RealtimeOverview = () => {
         return Math.abs(qty * px);
     });
 
+    const equityFormulaOk =
+        Number.isFinite(totalEquity) &&
+        Number.isFinite(cashBalance) &&
+        Number.isFinite(spotNetValue) &&
+        Number.isFinite(perpUnrealizedValue) &&
+        Math.abs((cashBalance + spotNetValue + perpUnrealizedValue) - totalEquity) < 1e-6;
+
     const tradingMode = summary.trading_mode || 'paper';
     const botStatus = summary.bot_status || 'stopped';
-    const activeStrategies = Array.isArray(summary.strategies) ? summary.strategies : [];
+    const strategyTypeToName = {
+        triangular: '三角套利',
+        graph: '图搜索套利',
+        funding_rate: '期现套利',
+        cashcarry: '期现套利',
+        pair: '配对交易',
+        grid: '网格交易',
+    };
+    const rawStrategyTypes = Array.isArray(summary.strategy_types) ? summary.strategy_types : [];
+    const rawStrategyNames = Array.isArray(summary.strategies) ? summary.strategies : [];
+    const activeStrategies = (rawStrategyTypes.length ? rawStrategyTypes : rawStrategyNames)
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+        .map((x) => {
+            const key = x.toLowerCase();
+            return strategyTypeToName[key] || x;
+        });
 
     const connectedExchangeCodes = exchangeHealth
         .filter((h) => h && h.is_connected === true)
@@ -245,12 +269,12 @@ const RealtimeOverview = () => {
 
             <div className="stats-row" style={{ marginBottom: '16px' }}>
                 <div className="stat-box">
-                    <div className="stat-label">现金余额</div>
+                    <div className="stat-label">现金账户余额</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
                         {formatAbsMoney(cashBalance, quoteCurrency)}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                        说明：此处为模拟盘现金（可能包含对冲/卖出所得），并非总权益
+                        来源：模拟盘现金账户实时余额（可能包含空头卖出所得）
                     </div>
                     {(spotShortNotionalAbs > 0.01 || perpNotionalAbs > 0.01) && (
                         <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.2 }}>
@@ -270,7 +294,7 @@ const RealtimeOverview = () => {
                     )}
                 </div>
                 <div className="stat-box">
-                    <div className="stat-label">仓位估值</div>
+                    <div className="stat-label">仓位估值（现货市值 + 合约浮盈亏）</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
                         {formatSignedMoney(positionsValue, quoteCurrency)}
                     </div>
@@ -294,6 +318,13 @@ const RealtimeOverview = () => {
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         交易次数: {omsSummary ? Number(omsSummary.total_orders || 0) : '—'}，胜率: {omsSummary ? `${(Number(omsSummary.win_rate || 0) * 100).toFixed(2)}%` : '—'}
                     </div>
+                </div>
+            </div>
+
+            <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(0,0,0,0.02)', borderRadius: '6px', fontSize: '9px', color: 'var(--text-muted)', lineHeight: 1.25 }}>
+                <strong>口径说明：</strong> 总权益 = 现金账户余额 + 现货仓位市值（空头为负） + 合约浮盈亏（不计名义本金）。
+                <div style={{ marginTop: '6px', fontFamily: 'monospace' }}>
+                    {equityFormulaOk ? '✅' : 'ℹ️'} equity = cash({formatAbsMoney(cashBalance, quoteCurrency)}) + spot({formatSignedMoney(spotNetValue, quoteCurrency)}) + perpPnL({formatSignedMoney(perpUnrealizedValue, quoteCurrency)}) = {formatAbsMoney(totalEquity, quoteCurrency)}
                 </div>
             </div>
 
