@@ -61,17 +61,57 @@ const AdminHub = ({ currentUser }) => {
       </div>
     </div>
 
-    <div style={{ display: 'grid', gap: '12px' }}>
+    <div style={{ display: 'grid', gap: '10px' }}>
       {sections.map((section) => (
         <div key={section.title} className="card">
           <div className="card-header"><span className="card-title">{section.title}</span></div>
-          <div className="card-body" style={{ padding: '12px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
+          <div className="card-body" style={{ padding: '10px' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))',
+                gap: '8px',
+              }}
+            >
               {section.items.map((item) => (
-                <Link key={item.path} to={item.path} className="card" style={{ textDecoration: 'none' }}>
-                  <div className="card-body" style={{ padding: '10px' }}>
-                    <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>{item.label}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{item.desc}</div>
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className="card"
+                  style={{
+                    textDecoration: 'none',
+                    display: 'flex',
+                    alignItems: 'stretch',
+                  }}
+                >
+                  <div
+                    className="card-body"
+                    style={{
+                      padding: '8px 9px',
+                      width: '100%',
+                      minHeight: '54px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '11px', lineHeight: 1.2, color: 'var(--text-primary)' }}>
+                      {item.label}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '9px',
+                        color: 'var(--text-muted)',
+                        lineHeight: 1.2,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {item.desc}
+                    </div>
                   </div>
                 </Link>
               ))}
