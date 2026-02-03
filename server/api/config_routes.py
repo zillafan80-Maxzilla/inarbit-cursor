@@ -655,12 +655,16 @@ async def get_simulation_portfolio(user: CurrentUser = Depends(get_current_user)
             exchange_id = row["exchange_id"]
             instrument = row["instrument"]
             quantity = _to_float(row["quantity"])
+            account_type = (row["account_type"] or "spot").lower()
 
             symbol = instrument if "/" in instrument else f"{instrument}/{quote_currency}"
             price = 1.0 if instrument == quote_currency else None
             if price is None:
-                key = f"ticker:{exchange_id}:{symbol}"
+                key = f"ticker_futures:{exchange_id}:{symbol}" if account_type == "perp" else f"ticker:{exchange_id}:{symbol}"
                 ticker = await redis.hgetall(key)
+                # 兜底：有时现货 ticker 可能暂缺，尝试用永续 ticker 估值
+                if (not ticker) and account_type != "perp":
+                    ticker = await redis.hgetall(f"ticker_futures:{exchange_id}:{symbol}")
                 price = _price_from_ticker(ticker)
 
             value = quantity * price if price is not None else None
