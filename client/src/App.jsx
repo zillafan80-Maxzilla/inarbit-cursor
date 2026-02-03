@@ -28,7 +28,6 @@ import AdminHub from './pages/AdminHub'
 import RealtimeOverview from './pages/RealtimeOverview'
 
 import OmsConsole from './pages/OmsConsole'
-import OmsConfig from './pages/OmsConfig'
 import BotConsole from './pages/BotConsole'
 import Scanners from './pages/Scanners'
 
@@ -129,8 +128,7 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
       title: '执行与调度',
       items: [
         { path: '/bot', icon: '🤖', label: '机器人控制台' },
-        { path: '/oms', icon: '🧩', label: '订单管理控制台' },
-        { path: '/oms-config', icon: '🧰', label: '订单管理参数' },
+        { path: '/oms', icon: '🧩', label: '订单管理控制' },
         { path: '/scanners', icon: '🔍', label: '扫描器参数', adminOnly: true },
         { path: '/decision', icon: '🧠', label: '决策管理' },
         { path: '/arbitrage', icon: '🧪', label: '套利机会' },
@@ -363,7 +361,7 @@ function App() {
                 {/* OMS */}
                 <Route path="/bot" element={authed ? <BotConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms" element={authed ? <OmsConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
-                <Route path="/oms-config" element={authed ? <OmsConfig /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/oms-config" element={authed ? <Navigate to="/oms" replace /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/scanners" element={authed ? <RequireAdmin><Scanners /></RequireAdmin> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/decision" element={authed ? <DecisionConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/arbitrage" element={authed ? <ArbitrageMonitor /> : <Login onLogin={(u) => setCurrentUser(u)} />} />

@@ -5,6 +5,37 @@ import { createReconnectingWebSocket, omsAPI } from '../api/client';
 
 const STORAGE_KEY = 'inarbit_oms_config';
 
+function parseIntOr(value, fallback) {
+    const n = parseInt(String(value ?? ''), 10);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function parseBool(value) {
+    return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+function normalizeConfig(input) {
+    const cfg = input && typeof input === 'object' ? input : {};
+    const maxAgeRaw = cfg.max_age_seconds;
+    const maxAge =
+        maxAgeRaw === null || String(maxAgeRaw).trim() === ''
+            ? null
+            : (() => {
+                const n = parseIntOr(maxAgeRaw, NaN);
+                return Number.isFinite(n) ? Math.max(1, n) : null;
+            })();
+    return {
+        trading_mode: cfg.trading_mode === 'live' ? 'live' : 'paper',
+        confirm_live: parseBool(cfg.confirm_live),
+        idempotency_key: String(cfg.idempotency_key ?? ''),
+        limit: Math.max(1, parseIntOr(cfg.limit, 20)),
+        max_rounds: Math.max(1, parseIntOr(cfg.max_rounds, 5)),
+        sleep_ms: Math.max(0, parseIntOr(cfg.sleep_ms, 500)),
+        max_age_seconds: maxAge,
+        auto_cancel: parseBool(cfg.auto_cancel),
+    };
+}
+
 function safeJson(v) {
     try {
         const seen = new WeakSet();
@@ -119,6 +150,7 @@ const OmsConsole = () => {
     const initialCfg = useMemo(() => ({ ...defaultConfig(), ...(loadConfig() || {}), ...(preset || {}) }), [preset]);
 
     const [cfg, setCfg] = useState(initialCfg);
+    const [defaultsSavedAt, setDefaultsSavedAt] = useState(null);
     const [planId, setPlanId] = useState('');
 
     const [loading, setLoading] = useState(false);
@@ -1019,11 +1051,44 @@ const OmsConsole = () => {
         return () => clearInterval(timer);
     }, [autoRefresh, autoRefreshMs, planId, cfg.trading_mode, orderQuery, fillQuery, autoRefreshPlanOnly, autoRefreshPlanPnL, refreshPlanPnL]);
 
+    const saveDefaults = () => {
+        try {
+            const normalized = normalizeConfig(cfg);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+            setCfg((c) => ({ ...c, ...normalized }));
+            setDefaultsSavedAt(new Date());
+            alert('订单管理默认参数已保存到本地');
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
+    };
+
+    const loadDefaults = () => {
+        try {
+            const normalized = normalizeConfig(loadConfig() || defaultConfig());
+            setCfg((c) => ({ ...c, ...normalized }));
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
+    };
+
+    const resetDefaults = () => {
+        if (!confirm('确定要重置订单管理默认参数吗？')) return;
+        try {
+            const d = normalizeConfig(defaultConfig());
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(d));
+            setCfg((c) => ({ ...c, ...d }));
+            setDefaultsSavedAt(new Date());
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
+    };
+
     return (
         <div className="content-body">
             <div className="page-header" style={{ marginBottom: '16px' }}>
                 <div>
-                    <h1 className="page-title">订单管理控制台</h1>
+                    <h1 className="page-title">订单管理控制</h1>
                     <p className="page-subtitle">执行 / 对账 / 撤单 / 刷新 / 下一步动作预览</p>
                 </div>
             </div>
@@ -1085,6 +1150,15 @@ const OmsConsole = () => {
                                     对账超时/轮询耗尽后自动撤单
                                 </label>
                             </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                            <button className="btn btn-secondary btn-sm" onClick={loadDefaults}>加载默认</button>
+                            <button className="btn btn-secondary btn-sm" onClick={resetDefaults}>重置默认</button>
+                            <button className="btn btn-primary btn-sm" onClick={saveDefaults}>保存为默认</button>
+                        </div>
+                        <div style={{ marginTop: '8px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                            {defaultsSavedAt ? `最近保存：${defaultsSavedAt.toLocaleString()}` : '提示：默认参数保存在本地（localStorage），用于下次进入自动加载'}
                         </div>
                     </div>
                 </div>

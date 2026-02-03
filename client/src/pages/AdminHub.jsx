@@ -14,8 +14,7 @@ const buildSections = (isAdmin) => ([
     title: '执行与调度',
     items: [
       { label: '机器人控制台', path: '/bot', desc: 'Bot 命令接口、持仓、手动下单与收益' },
-      { label: '订单管理控制台', path: '/oms', desc: '执行/对账/取消/收益与告警' },
-      { label: '订单管理参数', path: '/oms-config', desc: 'OMS 执行参数与策略' },
+      { label: '订单管理控制', path: '/oms', desc: '执行/对账/取消/收益与告警/参数' },
       ...(isAdmin ? [{ label: '扫描器参数', path: '/scanners', desc: 'Triangular/CashCarry 运行时调参（管理员）' }] : []),
       { label: '决策管理', path: '/decision', desc: '决策器输入/输出与阈值' },
       { label: '套利机会', path: '/arbitrage', desc: '机会发现与信号观测' },
