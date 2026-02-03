@@ -29,6 +29,8 @@ import RealtimeOverview from './pages/RealtimeOverview'
 
 import OmsConsole from './pages/OmsConsole'
 import OmsConfig from './pages/OmsConfig'
+import BotConsole from './pages/BotConsole'
+import Scanners from './pages/Scanners'
 
 import { getAuthToken, configAPI } from './api/client'
 
@@ -125,8 +127,10 @@ const Sidebar = ({ tradingMode, botStatus, currentUser }) => {
     {
       title: '执行与调度',
       items: [
+        { path: '/bot', icon: '🤖', label: '机器人控制台' },
         { path: '/oms', icon: '🧩', label: '订单管理控制台' },
         { path: '/oms-config', icon: '🧰', label: '订单管理参数' },
+        { path: '/scanners', icon: '🔍', label: '扫描器参数' },
         { path: '/decision', icon: '🧠', label: '决策管理' },
         { path: '/arbitrage', icon: '🧪', label: '套利机会' },
       ]
@@ -219,18 +223,16 @@ function App() {
   // 全局状态
   const [botStatus, setBotStatus] = useState('running');
   const [tradingMode, setTradingMode] = useState('paper');
-  const [currentUser, setCurrentUser] = useState(null);
-  const [liveEnabled, setLiveEnabled] = useState(false);
-  const authed = !!getAuthToken();
-
-  useEffect(() => {
+  const [currentUser, setCurrentUser] = useState(() => {
     try {
       const raw = localStorage.getItem('inarbit_user');
-      if (raw) setCurrentUser(JSON.parse(raw));
+      return raw ? JSON.parse(raw) : null;
     } catch {
-      setCurrentUser(null);
+      return null;
     }
-  }, []);
+  });
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const authed = !!getAuthToken();
 
   useEffect(() => {
     if (!getAuthToken()) return;
@@ -291,8 +293,10 @@ function App() {
                 <Route path="/system" element={authed ? <SystemOverview /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 
                 {/* OMS */}
+                <Route path="/bot" element={authed ? <BotConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms" element={authed ? <OmsConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/oms-config" element={authed ? <OmsConfig /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
+                <Route path="/scanners" element={authed ? <Scanners /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/decision" element={authed ? <DecisionConsole /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
                 <Route path="/arbitrage" element={authed ? <ArbitrageMonitor /> : <Login onLogin={(u) => setCurrentUser(u)} />} />
 

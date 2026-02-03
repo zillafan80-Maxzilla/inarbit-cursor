@@ -5,7 +5,7 @@ const sections = [
   {
     title: '系统与运行',
     items: [
-      { label: '控制面板', path: '/', desc: '启动/停止、模式切换与运行状态' },
+      { label: '控制面板', path: '/control', desc: '启动/停止、模式切换与运行状态' },
       { label: '系统概览', path: '/system', desc: '核心服务健康与统计' },
       { label: '运行日志', path: '/logs', desc: '系统运行日志与审计线索' },
     ],
@@ -13,8 +13,10 @@ const sections = [
   {
     title: '执行与调度',
     items: [
+      { label: '机器人控制台', path: '/bot', desc: 'Bot 命令接口、持仓、手动下单与收益' },
       { label: '订单管理控制台', path: '/oms', desc: '执行/对账/取消/收益与告警' },
       { label: '订单管理参数', path: '/oms-config', desc: 'OMS 执行参数与策略' },
+      { label: '扫描器参数', path: '/scanners', desc: 'Triangular/CashCarry 运行时调参（管理员）' },
       { label: '决策管理', path: '/decision', desc: '决策器输入/输出与阈值' },
       { label: '套利机会', path: '/arbitrage', desc: '机会发现与信号观测' },
     ],

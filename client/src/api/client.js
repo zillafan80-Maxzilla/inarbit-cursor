@@ -295,6 +295,12 @@ export const systemAPI = {
 
 export const riskAPI = {
     status: () => fetchAPI('/risk/status'),
+    getConfig: () => fetchAPI('/risk/config'),
+    updateConfig: (payload) => fetchAPI('/risk/config', {
+        method: 'PUT',
+        body: JSON.stringify(payload || {}),
+    }),
+    reloadConfig: () => fetchAPI('/risk/reload_config', { method: 'POST' }),
     panic: () => fetchAPI('/risk/panic', { method: 'POST' }),
     resetPanic: () => fetchAPI('/risk/reset_panic', { method: 'POST' }),
     reloadKeys: () => fetchAPI('/risk/reload_keys', { method: 'POST' }),
@@ -328,6 +334,51 @@ export const arbitrageAPI = {
         const query = new URLSearchParams(params).toString();
         return fetchAPI(`/arbitrage/opportunities/clear${query ? '?' + query : ''}`, { method: 'POST' });
     },
+};
+
+// ============================================
+// 机器人控制 API
+// ============================================
+
+export const botAPI = {
+    status: () => fetchAPI('/bot/status'),
+    start: () => fetchAPI('/bot/start', { method: 'POST' }),
+    stop: () => fetchAPI('/bot/stop', { method: 'POST' }),
+    restart: () => fetchAPI('/bot/restart', { method: 'POST' }),
+
+    listStrategies: () => fetchAPI('/bot/strategies'),
+    toggleStrategy: (strategyId, is_enabled) => fetchAPI(`/bot/strategy/${strategyId}/toggle`, {
+        method: 'POST',
+        body: JSON.stringify({ is_enabled: !!is_enabled }),
+    }),
+    updateStrategyConfig: (strategyId, payload) => fetchAPI(`/bot/strategy/${strategyId}/config`, {
+        method: 'PUT',
+        body: JSON.stringify(payload || {}),
+    }),
+
+    positions: () => fetchAPI('/bot/positions'),
+    manualOrder: (payload) => fetchAPI('/bot/order/manual', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
+    pnlDaily: (days = 7) => fetchAPI(`/bot/pnl/daily?days=${encodeURIComponent(String(days))}`),
+    pnlSummary: () => fetchAPI('/bot/pnl/summary'),
+};
+
+// ============================================
+// 扫描器运行时配置 API（管理员）
+// ============================================
+
+export const scannerAPI = {
+    status: () => fetchAPI('/scanners/status'),
+    updateTriangular: (payload) => fetchAPI('/scanners/triangular', {
+        method: 'PUT',
+        body: JSON.stringify(payload || {}),
+    }),
+    updateCashCarry: (payload) => fetchAPI('/scanners/cashcarry', {
+        method: 'PUT',
+        body: JSON.stringify(payload || {}),
+    }),
 };
 
 // ============================================
@@ -427,6 +478,19 @@ export const omsAPI = {
 };
 
 // ============================================
+// 运行时统计 API
+// ============================================
+
+export const statsAPI = {
+    realtime: () => fetchAPI('/stats/realtime'),
+    recentTrades: (limit = 50) => fetchAPI(`/stats/trades/recent?limit=${encodeURIComponent(String(limit))}`),
+    logTrade: (payload) => fetchAPI('/stats/trade/log', {
+        method: 'POST',
+        body: JSON.stringify(payload || {}),
+    }),
+};
+
+// ============================================
 // WebSocket 连接
 // ============================================
 
@@ -468,7 +532,7 @@ export function createReconnectingWebSocket(channel, onMessage, reconnectInterva
             try {
                 const data = JSON.parse(event.data);
                 onMessage(data);
-            } catch (e) {
+            } catch {
                 console.warn('无法解析 WebSocket 消息:', event.data);
             }
         };
@@ -525,7 +589,7 @@ export function createReconnectingWebSocketWithParams(channel, params = {}, onMe
             try {
                 const data = JSON.parse(event.data);
                 onMessage(data);
-            } catch (e) {
+            } catch {
                 console.warn('无法解析 WebSocket 消息:', event.data);
             }
         };

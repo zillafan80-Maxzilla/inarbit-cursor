@@ -2,53 +2,111 @@
  * 控制面板页面
  * 重构版 - 运行状态合并入卡片、四卡两两并排、状态中文化
  */
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useStrategies, useSignals } from '../api/hooks';
+import { botAPI, configAPI } from '../api/client';
 
 const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) => {
     const isRunning = botStatus === 'running';
 
-    // 当前运行的策略列表
-    const [activeStrategies, setActiveStrategies] = useState([]);
     const { strategies } = useStrategies();
 
-    // 模拟运行时间
+    // 运行时间（来自后端 start_timestamp）
+    const [startTimestamp, setStartTimestamp] = useState(null);
     const [uptime, setUptime] = useState('00:00:00');
     const { signals } = useSignals();
 
     useEffect(() => {
-        if (isRunning) {
-            const startTime = Date.now();
-            const timer = setInterval(() => {
-                const elapsed = Date.now() - startTime;
-                const hours = Math.floor(elapsed / 3600000);
-                const minutes = Math.floor((elapsed % 3600000) / 60000);
-                const seconds = Math.floor((elapsed % 60000) / 1000);
-                setUptime(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
-            }, 1000);
-            return () => clearInterval(timer);
+        const timer = setInterval(() => {
+            if (!isRunning || !startTimestamp) {
+                setUptime('00:00:00');
+                return;
+            }
+            const now = Date.now();
+            const startMs = Number(startTimestamp) * 1000;
+            const elapsed = Math.max(0, now - startMs);
+            const hours = Math.floor(elapsed / 3600000);
+            const minutes = Math.floor((elapsed % 3600000) / 60000);
+            const seconds = Math.floor((elapsed % 60000) / 1000);
+            setUptime(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [isRunning, startTimestamp]);
+
+    const loadBotStatus = async () => {
+        try {
+            const res = await botAPI.status();
+            const data = res?.data || {};
+            if (data.status) setBotStatus(data.status);
+            if (data.trading_mode) setTradingMode(data.trading_mode);
+            setStartTimestamp(data.start_timestamp || null);
+        } catch {
+            // ignore
         }
-    }, [isRunning]);
+    };
+
+    useEffect(() => {
+        loadBotStatus();
+        const t = setInterval(loadBotStatus, 5000);
+        return () => clearInterval(t);
+    }, []);
 
     const enabledStrategyIds = (strategies || [])
         .filter((s) => s.is_enabled)
         .map((s) => s.strategy_type);
 
-    const toggleBot = () => {
-        const newStatus = isRunning ? 'stopped' : 'running';
-        if (newStatus === 'running' && enabledStrategyIds.length === 0) {
+    const activeStrategies = useMemo(() => enabledStrategyIds, [enabledStrategyIds.join('|')]);
+
+    const toggleBot = async () => {
+        const target = isRunning ? 'stopped' : 'running';
+        if (target === 'running' && enabledStrategyIds.length === 0) {
             alert('请先至少启用一个策略后再启动机器人');
             return;
         }
-        setBotStatus(newStatus);
+        try {
+            if (target === 'running') {
+                await botAPI.start();
+            } else {
+                await botAPI.stop();
+            }
+            await loadBotStatus();
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
     };
 
-    useEffect(() => {
-        const enabled = (strategies || [])
-            .filter((s) => s.is_enabled)
-            .map((s) => s.strategy_type);
-        setActiveStrategies(enabled);
-    }, [strategies]);
+    const restartBot = async () => {
+        if (!confirm('确认重启机器人？')) return;
+        try {
+            await botAPI.restart();
+            await loadBotStatus();
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
+    };
+
+    const switchMode = async (mode) => {
+        if (isRunning) {
+            alert('请先停止机器人再切换模式');
+            return;
+        }
+        try {
+            const gs = await configAPI.getGlobalSettings();
+            const data = gs?.data || {};
+            await configAPI.updateGlobalSettings({
+                tradingMode: mode,
+                defaultStrategy: data.defaultStrategy,
+                riskLevel: data.riskLevel,
+                maxDailyLoss: data.maxDailyLoss,
+                maxPositionSize: data.maxPositionSize,
+                enableNotifications: data.enableNotifications,
+            });
+            setTradingMode(mode);
+            await loadBotStatus();
+        } catch (e) {
+            alert(String(e?.message || e));
+        }
+    };
 
     // 策略配置
     const strategyOptions = [
@@ -156,7 +214,7 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
                     <div className="card-body" style={{ padding: '12px' }}>
                         <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                             <button
-                                onClick={() => !isRunning && setTradingMode('paper')}
+                                onClick={() => switchMode('paper')}
                                 disabled={isRunning}
                                 className={`btn ${tradingMode === 'paper' ? 'btn-primary' : 'btn-secondary'}`}
                                 style={{ flex: 1, fontSize: '11px', padding: '8px' }}
@@ -164,7 +222,7 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
                                 📝 模拟盘
                             </button>
                             <button
-                                onClick={() => !isRunning && setTradingMode('live')}
+                                onClick={() => switchMode('live')}
                                 disabled={isRunning}
                                 className={`btn ${tradingMode === 'live' ? 'btn-danger' : 'btn-secondary'}`}
                                 style={{ flex: 1, fontSize: '11px', padding: '8px' }}
@@ -172,6 +230,14 @@ const ControlPanel = ({ botStatus, setBotStatus, tradingMode, setTradingMode }) 
                                 💰 实盘
                             </button>
                         </div>
+                        <button
+                            onClick={restartBot}
+                            className="btn btn-secondary"
+                            style={{ width: '100%', fontSize: '11px', padding: '8px' }}
+                            disabled={!isRunning}
+                        >
+                            🔄 重启机器人
+                        </button>
                         {isRunning && (
                             <div style={{
                                 fontSize: '9px',

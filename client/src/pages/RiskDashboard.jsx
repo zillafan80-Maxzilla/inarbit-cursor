@@ -10,6 +10,11 @@ const RiskDashboard = () => {
   const [tradingEnabled, setTradingEnabled] = useState(true);
   const [riskStatus, setRiskStatus] = useState({});
   const [systemMetrics, setSystemMetrics] = useState(null);
+  const [riskConfig, setRiskConfig] = useState(null);
+  const [riskConfigPath, setRiskConfigPath] = useState('');
+  const [riskConfigDraft, setRiskConfigDraft] = useState('{}');
+  const [riskConfigPersist, setRiskConfigPersist] = useState(true);
+  const [riskConfigSaving, setRiskConfigSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedMetric, setSelectedMetric] = useState(null);
   const metricsData = systemMetrics?.data ? systemMetrics.data : systemMetrics || {};
@@ -86,6 +91,14 @@ const RiskDashboard = () => {
       setTradingEnabled(!!res.trading_allowed);
       setRiskStatus(res.status || {});
       setSystemMetrics(metrics?.data || metrics || null);
+      try {
+        const cfg = await riskAPI.getConfig();
+        setRiskConfig(cfg?.config || null);
+        setRiskConfigPath(cfg?.path || '');
+        setRiskConfigDraft(JSON.stringify(cfg?.config || {}, null, 2));
+      } catch {
+        // ignore - 可能无权限
+      }
     } catch (err) {
       console.error('获取风险状态失败:', err);
     } finally {
@@ -118,6 +131,37 @@ const RiskDashboard = () => {
       alert('接口密钥已重载');
     } catch (err) {
       alert('重载失败: ' + err.message);
+    }
+  };
+
+  const saveRiskConfig = async () => {
+    const raw = riskConfigDraft || '{}';
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      alert('风险配置 JSON 解析失败: ' + String(e?.message || e));
+      return;
+    }
+    setRiskConfigSaving(true);
+    try {
+      const resp = await riskAPI.updateConfig({ config: parsed, persist: !!riskConfigPersist });
+      setRiskConfig(resp?.config || parsed);
+      alert('风险配置已更新');
+      await fetchStatus();
+    } catch (err) {
+      alert('保存失败: ' + String(err?.message || err));
+    }
+    setRiskConfigSaving(false);
+  };
+
+  const reloadRiskConfig = async () => {
+    try {
+      await riskAPI.reloadConfig();
+      await fetchStatus();
+      alert('风险配置已重新加载');
+    } catch (err) {
+      alert('重载失败: ' + String(err?.message || err));
     }
   };
 
@@ -465,6 +509,51 @@ const RiskDashboard = () => {
                   <span style={{ color: 'var(--text-muted)' }}>日交易次数</span>
                   <span style={{ fontWeight: 600 }}>89 / 500</span>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 风险配置（后端 /api/v1/risk/config） */}
+          <div className="config-panel" style={{ marginTop: '16px' }}>
+            <div className="config-panel-header">
+              <div className="config-panel-title">风险配置</div>
+            </div>
+            <div className="config-panel-body" style={{ padding: '12px 16px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                来源：`/api/v1/risk/config` {riskConfigPath ? `（${riskConfigPath}）` : ''}
+              </div>
+              <textarea
+                value={riskConfigDraft}
+                onChange={(e) => setRiskConfigDraft(e.target.value)}
+                style={{
+                  width: '100%',
+                  minHeight: '220px',
+                  fontSize: '10px',
+                  fontFamily: 'monospace',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  padding: '8px',
+                  background: 'rgba(0,0,0,0.02)',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!riskConfigPersist}
+                    onChange={(e) => setRiskConfigPersist(e.target.checked)}
+                  />
+                  持久化保存到文件
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-secondary btn-sm" onClick={reloadRiskConfig}>重新加载</button>
+                  <button className="btn btn-primary btn-sm" onClick={saveRiskConfig} disabled={riskConfigSaving}>
+                    {riskConfigSaving ? '保存中...' : '保存配置'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginTop: '8px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                提示：需要管理员权限。修改错误会影响风控判断，请谨慎。
               </div>
             </div>
           </div>

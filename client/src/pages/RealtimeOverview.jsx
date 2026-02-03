@@ -1,19 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { systemAPI } from '../api/client';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-
-const fetchAPI = async (path) => {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`,
-      'Content-Type': 'application/json'
-    }
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-};
+import { systemAPI, statsAPI } from '../api/client';
 
 const formatUptime = (totalSeconds) => {
     const safeSeconds = Math.max(0, Number(totalSeconds || 0));
@@ -72,7 +59,7 @@ const RealtimeOverview = () => {
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const res = await fetchAPI('/api/v1/stats/realtime');
+                const res = await statsAPI.realtime();
                 if (res.success) {
                     setStats(res.data);
                 }
@@ -83,7 +70,7 @@ const RealtimeOverview = () => {
 
         const fetchTrades = async () => {
             try {
-                const res = await fetchAPI('/api/v1/stats/trades/recent?limit=20');
+                const res = await statsAPI.recentTrades(20);
                 if (res.success) {
                     setTrades(res.data);
                 }
