@@ -8,7 +8,7 @@ if not env_path.exists():
         "POSTGRES_HOST=localhost\n"
         "POSTGRES_PORT=5432\n"
         "POSTGRES_USER=inarbit\n"
-        "POSTGRES_PASSWORD=inarbit123\n"
+        "POSTGRES_PASSWORD=inarbit_secret_2026\n"
         "POSTGRES_DB=inarbit\n"
         "REDIS_HOST=localhost\n"
         "REDIS_PORT=6379\n"

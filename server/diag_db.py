@@ -16,7 +16,7 @@ async def run_diagnostic():
     pg_host = os.getenv('POSTGRES_HOST', 'localhost')
     pg_port = int(os.getenv('POSTGRES_PORT', '5432'))
     pg_user = os.getenv('POSTGRES_USER', 'inarbit')
-    pg_password = os.getenv('POSTGRES_PASSWORD', 'inarbit123')
+    pg_password = os.getenv('POSTGRES_PASSWORD', 'inarbit_secret_2026')
     pg_database = os.getenv('POSTGRES_DB', 'inarbit')
     
     print(f"Connecting to {pg_host}:{pg_port} as {pg_user}...")
