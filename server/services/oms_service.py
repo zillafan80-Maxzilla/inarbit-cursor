@@ -1464,9 +1464,8 @@ class OmsService:
         if not members:
             raise RuntimeError("no decisions")
 
-        allowed_symbols = await self._get_enabled_symbols(user_id)
-        if not allowed_symbols:
-            raise RuntimeError("no enabled trading pairs for execution")
+        enabled_by_exchange: dict[str, set[str]] = {}
+        had_any_exchange_pairs = False
 
         for raw in members:
             if isinstance(raw, (bytes, bytearray)):
@@ -1475,35 +1474,49 @@ class OmsService:
                 decision = json.loads(raw)
             except Exception:
                 continue
-            if self._decision_allowed(decision, allowed_symbols):
+            exchange = (decision.get("exchange") or decision.get("exchange_id") or self.exchange_id or "").strip()
+            if not exchange:
+                exchange = self.exchange_id
+            enabled = enabled_by_exchange.get(exchange)
+            if enabled is None:
+                enabled = await self._get_enabled_symbols(user_id, exchange_id=exchange)
+                enabled_by_exchange[exchange] = enabled
+            if enabled:
+                had_any_exchange_pairs = True
+            if self._decision_allowed(decision, enabled_symbols=enabled, exchange_id=exchange):
+                # Bind execution context to the chosen exchange for the rest of the OMS flow.
+                self.exchange_id = exchange
                 return decision
 
+        if not had_any_exchange_pairs:
+            raise RuntimeError("no enabled trading pairs for execution")
         raise RuntimeError("no decisions for enabled trading pairs")
 
-    async def _get_enabled_symbols(self, user_id: UUID) -> set[str]:
+    async def _get_enabled_symbols(self, user_id: UUID, exchange_id: Optional[str] = None) -> set[str]:
         try:
             config = await get_config_service()
-            pairs = await config.get_pairs_for_exchange(self.exchange_id, user_id=user_id, enabled_only=True)
+            ex = (exchange_id or self.exchange_id or "").strip()
+            pairs = await config.get_pairs_for_exchange(ex, user_id=user_id, enabled_only=True)
             return {p.symbol for p in (pairs or []) if p.symbol and p.is_active}
         except Exception:
             return set()
 
-    def _decision_allowed(self, decision: dict, allowed_symbols: set[str]) -> bool:
-        if not allowed_symbols:
+    def _decision_allowed(self, decision: dict, enabled_symbols: set[str], exchange_id: str) -> bool:
+        if not enabled_symbols:
             return False
-        exchange = decision.get("exchange") or decision.get("exchange_id") or self.exchange_id
-        if exchange != self.exchange_id:
+        exchange = (decision.get("exchange") or decision.get("exchange_id") or exchange_id or "").strip()
+        if exchange != exchange_id:
             return False
         raw = decision.get("rawOpportunity") or decision.get("raw_opportunity") or {}
         symbols = raw.get("symbols")
         if isinstance(symbols, list) and symbols:
             for s in symbols:
-                if isinstance(s, str) and s not in allowed_symbols:
+                if isinstance(s, str) and s not in enabled_symbols:
                     return False
             return True
         symbol = decision.get("symbol") or ""
         if isinstance(symbol, str) and symbol:
-            return symbol in allowed_symbols
+            return symbol in enabled_symbols
         return False
 
     async def _record_plan_pnl(
