@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 import { useConnectedExchanges, useOmsPnLSummary, useOmsPnLHistory } from '../api/hooks';
-import { createReconnectingWebSocketWithParams } from '../api/client';
+import { configAPI, createReconnectingWebSocketWithParams } from '../api/client';
 
 const PnLOverview = ({ tradingMode = 'paper' }) => {
     const { exchanges, loading: exchangesLoading } = useConnectedExchanges();
@@ -101,6 +101,13 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
     const lineColor = isPaper ? 'var(--cyan)' : 'var(--color-danger)';
     const modeName = isPaper ? '模拟盘' : '实盘';
 
+    // 曲线类型：模拟盘默认显示“总权益（含未实现）”，避免“只有一天1个点看起来不动”的误解
+    const [curveMode, setCurveMode] = useState(() => (tradingMode === 'paper' ? 'equity' : 'realized')); // equity | realized
+    useEffect(() => {
+        setCurveMode(isPaper ? 'equity' : 'realized');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [effectiveMode]);
+
     const summary = liveSummary ?? summaryBase;
     const history = liveHistory ?? historyBase;
     const pnlHistory = Array.isArray(history) ? history : [];
@@ -116,23 +123,95 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
         return Number.isNaN(d2.getTime()) ? null : d2;
     };
 
-    const chartData = useMemo(() => {
+    // 已实现收益曲线（OMS paper_pnl/live_pnl）：按记录时间累加（更符合“实时更新”的直觉）
+    const realizedCurve = useMemo(() => {
         if (!pnlHistory.length) return [];
-        const daily = new Map();
-        pnlHistory.forEach((row) => {
-            const date = parseRowDate(row) || new Date();
-            const key = date.toISOString().slice(0, 10);
-            const profit = Number(row.profit || 0);
-            daily.set(key, (daily.get(key) || 0) + profit);
+        const rows = [...pnlHistory];
+        rows.sort((a, b) => {
+            const ad = parseRowDate(a)?.getTime() || 0;
+            const bd = parseRowDate(b)?.getTime() || 0;
+            return ad - bd;
         });
-        const days = Array.from(daily.entries())
-            .sort((a, b) => a[0].localeCompare(b[0]));
         let acc = 0;
-        return days.map(([day, value]) => {
-            acc += value;
-            return { date: day.slice(5), value: Number(acc.toFixed(6)) };
+        return rows.map((row) => {
+            const d = parseRowDate(row) || new Date();
+            const profit = Number(row.profit || 0);
+            acc += Number.isFinite(profit) ? profit : 0;
+            const label = d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            return { t: label, value: Number(acc.toFixed(6)) };
         });
     }, [pnlHistory]);
+
+    // 总权益曲线（含未实现）：来自 simulation/portfolio 的 totalEquity，前端按时间采样
+    const EQUITY_STORAGE_KEY = 'inarbit_equity_curve_paper';
+    const [equityCurve, setEquityCurve] = useState([]);
+    const [equityInfo, setEquityInfo] = useState({ initial: 1000, currency: 'USDT', last: null });
+    useEffect(() => {
+        if (!isPaper) return;
+        let active = true;
+
+        const loadLocal = () => {
+            try {
+                const raw = localStorage.getItem(EQUITY_STORAGE_KEY);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch {
+                return [];
+            }
+        };
+
+        const saveLocal = (rows) => {
+            try {
+                localStorage.setItem(EQUITY_STORAGE_KEY, JSON.stringify(rows.slice(-1500)));
+            } catch {
+                // ignore
+            }
+        };
+
+        // init from local storage (keep last 24h)
+        const now = Date.now();
+        const local = loadLocal().filter((p) => p && Number.isFinite(Number(p.ts)) && (now - Number(p.ts)) <= 24 * 3600 * 1000);
+        setEquityCurve(local);
+
+        const poll = async () => {
+            try {
+                const res = await configAPI.getSimulationPortfolio();
+                const s = res?.data?.summary || {};
+                const initial = Number(s.initialCapital ?? 1000);
+                const currency = String(s.quoteCurrency || 'USDT');
+                const equity = Number(s.totalEquity ?? s.currentBalance ?? 0);
+                if (!active) return;
+                setEquityInfo({ initial, currency, last: equity });
+                if (!Number.isFinite(equity) || !Number.isFinite(initial)) return;
+
+                setEquityCurve((prev) => {
+                    const ts = Date.now();
+                    const next = [...(prev || [])];
+                    const last = next[next.length - 1];
+                    // 去抖：权益没变则不追加（减少噪声）
+                    if (last && Math.abs(Number(last.equity) - equity) < 1e-9) return prev;
+                    next.push({ ts, equity, profit: equity - initial, currency });
+                    const trimmed = next.filter((p) => (ts - Number(p.ts)) <= 24 * 3600 * 1000).slice(-1500);
+                    saveLocal(trimmed);
+                    return trimmed;
+                });
+            } catch {
+                // ignore
+            }
+        };
+
+        poll();
+        const t = setInterval(poll, 5000);
+        return () => {
+            active = false;
+            clearInterval(t);
+        };
+    }, [isPaper]);
+
+    const chartData = curveMode === 'equity'
+        ? equityCurve.map((p) => ({ t: new Date(p.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }), value: Number(p.profit || 0), equity: Number(p.equity || 0) }))
+        : realizedCurve;
 
     const pagedTrades = useMemo(() => {
         const rows = [...pnlHistory];
@@ -295,13 +374,31 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
 
             {/* 收益曲线 */}
             <div className="stat-box" style={{ height: '260px', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '11px', marginBottom: '10px', fontWeight: 500 }}>
-                    {modeName}收益曲线
-                </h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <h3 style={{ fontSize: '11px', marginBottom: 0, fontWeight: 500 }}>
+                        {modeName}{curveMode === 'equity' ? '总权益变化（含未实现）' : '已实现收益曲线（OMS）'}
+                    </h3>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {isPaper && (
+                            <button
+                                className={`btn btn-sm ${curveMode === 'equity' ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => setCurveMode('equity')}
+                            >
+                                总权益
+                            </button>
+                        )}
+                        <button
+                            className={`btn btn-sm ${curveMode === 'realized' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setCurveMode('realized')}
+                        >
+                            已实现
+                        </button>
+                    </div>
+                </div>
                 <ResponsiveContainer width="100%" height="90%">
                     <LineChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 9 }} stroke="var(--text-muted)" />
+                        <XAxis dataKey="t" tick={{ fontSize: 9 }} stroke="var(--text-muted)" />
                         <YAxis tick={{ fontSize: 9 }} stroke="var(--text-muted)" />
                         <Tooltip
                             contentStyle={{ backgroundColor: 'var(--base3)', border: '1px solid var(--border-subtle)', fontSize: '10px' }}
@@ -309,16 +406,31 @@ const PnLOverview = ({ tradingMode = 'paper' }) => {
                         <Line
                             type="monotone"
                             dataKey="value"
-                            name={modeName}
+                            name={curveMode === 'equity' ? '利润(USDT)' : '累计已实现(USDT)'}
                             stroke={lineColor}
                             strokeWidth={2}
                             dot={{ r: 2 }}
                         />
+                        {curveMode === 'equity' && (
+                            <Line
+                                type="monotone"
+                                dataKey="equity"
+                                name={`总权益(${equityInfo.currency || 'USDT'})`}
+                                stroke="var(--green)"
+                                strokeWidth={2}
+                                dot={false}
+                            />
+                        )}
                     </LineChart>
                 </ResponsiveContainer>
                 {!chartData.length && (
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '10px', marginTop: '8px' }}>
                         暂无收益曲线数据
+                    </div>
+                )}
+                {curveMode === 'realized' && isPaper && (
+                    <div style={{ marginTop: '6px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                        提示：已实现曲线仅在产生已完成收益记录时变动；若你看到“收益总览”在变动，通常是未实现浮盈亏导致总权益实时波动。
                     </div>
                 )}
             </div>
