@@ -138,65 +138,165 @@ class RuntimeStatsService:
         """更新统计信息"""
         redis = await get_redis()
         pool = await get_pg_pool()
-        
-        # 从Redis获取当前余额（模拟模式下不会实际变化）
-        initial_str = await redis.hget(STATS_KEY, "initial_balance")
-        current_str = await redis.hget(STATS_KEY, "current_balance")
-        
-        initial_balance = float(initial_str.decode() if isinstance(initial_str, bytes) else initial_str or "1000")
-        current_balance = float(current_str.decode() if isinstance(current_str, bytes) else current_str or "1000")
-        
-        # 更新最后更新时间
-        await redis.hset(STATS_KEY, mapping={
-            "last_update": str(time.time())
-        })
-        
-        # 记录利润历史（用于绘制曲线）
-        timestamp = int(time.time())
-        await redis.zadd(
-            PROFIT_HISTORY_KEY,
-            {f"{timestamp}:{current_balance}": timestamp}
+
+        def _to_float(v, default: float = 0.0) -> float:
+            try:
+                if v is None:
+                    return default
+                if isinstance(v, (bytes, bytearray)):
+                    v = v.decode("utf-8", errors="ignore")
+                return float(v)
+            except Exception:
+                return default
+
+        def _price_from_ticker(ticker: dict):
+            if not ticker:
+                return None
+            last = ticker.get("last") or ticker.get("close")
+            if last is not None:
+                return _to_float(last, default=None)
+            bid = ticker.get("bid")
+            ask = ticker.get("ask")
+            if bid is not None and ask is not None:
+                return (_to_float(bid) + _to_float(ask)) / 2
+            if bid is not None:
+                return _to_float(bid)
+            if ask is not None:
+                return _to_float(ask)
+            return None
+
+        # 默认值（避免空系统时 stats 结构崩溃）
+        initial_balance = 1000.0
+        cash_balance = 1000.0
+        realized_pnl = 0.0
+        unrealized_pnl_rt = 0.0
+        positions_value = 0.0
+        total_equity = 1000.0
+
+        # 定期从数据库刷新配置信息 + 计算模拟盘权益口径
+        async with pool.acquire() as conn:
+            global_config = await conn.fetchrow(
+                "SELECT user_id, trading_mode, bot_status FROM global_settings ORDER BY updated_at DESC NULLS LAST LIMIT 1"
+            )
+
+            user_id = global_config["user_id"] if global_config else None
+            if user_id:
+                sim = await conn.fetchrow(
+                    """
+                    SELECT initial_capital, quote_currency, current_balance,
+                           realized_pnl, unrealized_pnl, total_trades, win_rate
+                    FROM simulation_config
+                    WHERE user_id = $1
+                    """,
+                    user_id,
+                )
+                quote_currency = (sim["quote_currency"] if sim else "USDT") or "USDT"
+                initial_balance = _to_float(sim["initial_capital"] if sim else 1000.0, default=1000.0)
+                cash_balance = _to_float(sim["current_balance"] if sim else 1000.0, default=1000.0)
+                realized_pnl = _to_float(sim["realized_pnl"] if sim else 0.0, default=0.0)
+
+                # 模拟持仓（paper_positions）+ 实时行情估值，得到 positions_value 和实时未实现盈亏
+                rows = await conn.fetch(
+                    """
+                    SELECT exchange_id, account_type, instrument, quantity, avg_price
+                    FROM paper_positions
+                    WHERE user_id = $1 AND quantity <> 0
+                    """,
+                    user_id,
+                )
+
+                for row in rows or []:
+                    exchange_id = row["exchange_id"]
+                    instrument = row["instrument"]
+                    quantity = _to_float(row["quantity"])
+                    account_type = (row["account_type"] or "spot").lower()
+
+                    symbol = instrument if "/" in instrument else f"{instrument}/{quote_currency}"
+                    price = 1.0 if instrument == quote_currency else None
+                    if price is None:
+                        key = f"ticker_futures:{exchange_id}:{symbol}" if account_type == "perp" else f"ticker:{exchange_id}:{symbol}"
+                        ticker = await redis.hgetall(key)
+                        if (not ticker) and account_type != "perp":
+                            ticker = await redis.hgetall(f"ticker_futures:{exchange_id}:{symbol}")
+                        price = _price_from_ticker(ticker)
+
+                    avg_price = _to_float(row["avg_price"]) if row["avg_price"] is not None else None
+                    unrealized = None
+                    if price is not None and avg_price is not None:
+                        unrealized = (price - avg_price) * quantity
+                        unrealized_pnl_rt += unrealized
+
+                    # 与 /api/v1/config/simulation/portfolio 对齐的估值口径
+                    if account_type == "perp":
+                        value = unrealized
+                    else:
+                        value = quantity * price if price is not None else None
+
+                    if value is not None:
+                        positions_value += float(value)
+
+                total_equity = cash_balance + positions_value
+
+            # 刷新交易模式和bot状态（写入 Redis）
+            if global_config:
+                await redis.hset(
+                    STATS_KEY,
+                    mapping={
+                        "trading_mode": global_config["trading_mode"] or "paper",
+                        "bot_status": global_config["bot_status"] or "running",
+                    },
+                )
+
+            # 刷新启用的策略
+            strategies = await conn.fetch("SELECT strategy_type FROM strategy_configs WHERE is_enabled = true")
+            strategy_names = [s["strategy_type"] for s in strategies] if strategies else []
+            await redis.hset(STATS_KEY, "active_strategies", ",".join(strategy_names) if strategy_names else "")
+
+            # 刷新启用的交易所（注意：这里是“已启用配置”，不等同于真实连通）
+            exchanges = await conn.fetch("SELECT DISTINCT exchange_id FROM exchange_configs WHERE is_active = true")
+            exchange_names = [e["exchange_id"] for e in exchanges] if exchanges else []
+            await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
+
+            # 刷新交易对
+            try:
+                pairs = await conn.fetch(
+                    """
+                    SELECT DISTINCT tp.symbol
+                    FROM trading_pairs tp
+                    JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id
+                    WHERE etp.is_enabled = true
+                    LIMIT 20
+                    """
+                )
+            except Exception:
+                pairs = await conn.fetch("SELECT symbol FROM trading_pairs WHERE is_active = true LIMIT 20")
+            pair_symbols = [p["symbol"] for p in pairs] if pairs else []
+            await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
+
+        # 写入资金/权益口径（统一各页面）
+        now_ts = time.time()
+        await redis.hset(
+            STATS_KEY,
+            mapping={
+                "last_update": str(now_ts),
+                "initial_balance": str(initial_balance),
+                # 兼容旧字段：current_balance 表示总权益（equity）
+                "current_balance": str(total_equity),
+                "cash_balance": str(cash_balance),
+                "positions_value": str(positions_value),
+                "realized_pnl": str(realized_pnl),
+                "unrealized_pnl": str(unrealized_pnl_rt),
+                "net_profit": str(total_equity - initial_balance),
+            },
         )
+
+        # 记录权益曲线（用于“实时总览”的轻量曲线/趋势）
+        timestamp = int(now_ts)
+        await redis.zadd(PROFIT_HISTORY_KEY, {f"{timestamp}:{total_equity}": timestamp})
         
         # 只保留最近24小时的数据
         cutoff = timestamp - 86400
         await redis.zremrangebyscore(PROFIT_HISTORY_KEY, "-inf", cutoff)
-        
-        # 定期从数据库刷新配置信息
-        async with pool.acquire() as conn:
-            # 刷新交易模式和bot状态
-            global_config = await conn.fetchrow("SELECT trading_mode, bot_status FROM global_settings LIMIT 1")
-            if global_config:
-                await redis.hset(STATS_KEY, mapping={
-                    "trading_mode": global_config['trading_mode'] or 'paper',
-                    "bot_status": global_config['bot_status'] or 'running'
-                })
-            
-            # 刷新启用的策略
-            strategies = await conn.fetch("SELECT strategy_type FROM strategy_configs WHERE is_enabled = true")
-            strategy_names = [s['strategy_type'] for s in strategies] if strategies else []
-            await redis.hset(STATS_KEY, "active_strategies", ",".join(strategy_names) if strategy_names else "")
-            
-            # 刷新启用的交易所
-            exchanges = await conn.fetch("SELECT DISTINCT exchange_id FROM exchange_configs WHERE is_active = true")
-            exchange_names = [e['exchange_id'] for e in exchanges] if exchanges else []
-            await redis.hset(STATS_KEY, "active_exchanges", ",".join(exchange_names) if exchange_names else "")
-            
-            # 刷新交易对 - 先尝试JOIN查询，如果失败则使用简单查询
-            try:
-                pairs = await conn.fetch("""
-                    SELECT DISTINCT tp.symbol 
-                    FROM trading_pairs tp 
-                    JOIN exchange_trading_pairs etp ON tp.id = etp.trading_pair_id 
-                    WHERE etp.is_enabled = true 
-                    LIMIT 20
-                """)
-            except Exception:
-                pairs = await conn.fetch("""
-                    SELECT symbol FROM trading_pairs WHERE is_active = true LIMIT 20
-                """)
-            pair_symbols = [p['symbol'] for p in pairs] if pairs else []
-            await redis.hset(STATS_KEY, "trading_pairs", ",".join(pair_symbols) if pair_symbols else "")
     
     async def get_stats(self) -> Dict:
         """获取当前统计信息"""

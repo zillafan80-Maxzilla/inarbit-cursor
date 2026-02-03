@@ -119,11 +119,14 @@ async def get_trading_pairs(exchange_id: Optional[str] = None, user: CurrentUser
         else:
             pairs = await service.get_all_pairs()
         
-        return {
-            "success": True,
-            "data": [p.to_dict() for p in pairs],
-            "count": len(pairs)
-        }
+        items = []
+        for p in pairs:
+            d = p.to_dict()
+            if exchange_id:
+                d["exchange_id"] = exchange_id
+            items.append(d)
+
+        return {"success": True, "data": items, "count": len(items)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

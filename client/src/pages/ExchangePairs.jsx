@@ -6,6 +6,7 @@ const ExchangePairs = () => {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const [exchanges, setExchanges] = useState([]);
+    const [healthMap, setHealthMap] = useState(() => new Map());
     const [exchangeId, setExchangeId] = useState('');
     const [pairs, setPairs] = useState([]);
     const [stats, setStats] = useState(null);
@@ -15,6 +16,7 @@ const ExchangePairs = () => {
     const [error, setError] = useState('');
     const [bulkUpdating, setBulkUpdating] = useState(false);
     const [selected, setSelected] = useState(() => new Set());
+    const [healthLoading, setHealthLoading] = useState(false);
 
     const exchangeIdFromUrl = useMemo(() => searchParams.get('exchange_id') || '', [searchParams]);
 
@@ -22,6 +24,18 @@ const ExchangePairs = () => {
         const res = await exchangeV2API.list();
         const list = res?.data || [];
         setExchanges(list);
+    };
+
+    const loadHealth = async (force = false) => {
+        setHealthLoading(true);
+        try {
+            const resp = await exchangeV2API.health(force ? { force: 'true' } : {});
+            const list = Array.isArray(resp?.data) ? resp.data : [];
+            setHealthMap(new Map(list.map((it) => [it.id, it])));
+        } catch {
+            setHealthMap(new Map());
+        }
+        setHealthLoading(false);
     };
 
     const loadPairs = async () => {
@@ -44,6 +58,7 @@ const ExchangePairs = () => {
 
     useEffect(() => {
         loadExchanges();
+        loadHealth(false);
     }, []);
 
     useEffect(() => {
@@ -75,7 +90,20 @@ const ExchangePairs = () => {
         return exchanges.find((ex) => ex.id === exchangeId) || null;
     }, [exchanges, exchangeId]);
 
+    const selectedHealth = useMemo(() => {
+        return healthMap.get(exchangeId) || null;
+    }, [healthMap, exchangeId]);
+
+    const isConnected = useMemo(() => {
+        const v = selectedHealth?.is_connected;
+        return typeof v === 'boolean' ? v : null;
+    }, [selectedHealth]);
+
     const togglePair = async (pairId, current) => {
+        if (isConnected === false) {
+            alert('该交易所当前未通过真实连接检测，已禁止修改交易对启用状态。请先在“交易所管理”中修复密钥/连通性后再操作。');
+            return;
+        }
         try {
             await exchangeV2API.togglePair(exchangeId, pairId, { trading_pair_id: pairId, is_enabled: !current });
             await loadPairs();
@@ -86,6 +114,10 @@ const ExchangePairs = () => {
 
     const bulkToggle = async (targetEnabled) => {
         if (!exchangeId) return;
+        if (isConnected === false) {
+            alert('该交易所当前未通过真实连接检测，已禁止批量修改交易对启用状态。');
+            return;
+        }
         const selectedIds = Array.from(selected);
         const scope = selectedIds.length
             ? filteredPairs.filter((p) => selectedIds.includes(p.pair_id))
@@ -196,6 +228,7 @@ const ExchangePairs = () => {
                     <button
                         onClick={async () => {
                             await loadExchanges();
+                            await loadHealth(true);
                             await loadPairs();
                         }}
                         className="btn btn-secondary"
@@ -233,6 +266,12 @@ const ExchangePairs = () => {
                         </div>
                     </div>
                 </div>
+                {selectedExchange && (
+                    <div style={{ marginTop: '10px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                        真实连接：{isConnected === true ? '🟢 已连通' : isConnected === false ? '🔴 未连通' : (healthLoading ? '检测中...' : '⚪ 未检测')}
+                        {selectedHealth?.error ? `（${selectedHealth.error}）` : ''}
+                    </div>
+                )}
                 {selectedExchange && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px' }}>
                         <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>

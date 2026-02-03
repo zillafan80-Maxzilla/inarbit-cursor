@@ -2,19 +2,19 @@
  * 交易所管理页面
  * 灰绿色主题重构版 - 表格列表风格
  */
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useExchanges } from '../api/hooks';
 import { exchangeV2API } from '../api/client';
 
 // 支持的交易所列表
 const SUPPORTED_EXCHANGES = [
-    { id: 'binance', name: 'Binance', fullName: 'Binance', icon: '🟡', color: '#F0B90B' },
-    { id: 'okx', name: 'OKX', fullName: 'OKX', icon: '⚪', color: '#121212' },
-    { id: 'bybit', name: 'Bybit', fullName: 'Bybit', icon: '🟠', color: '#F7A600' },
-    { id: 'gate', name: 'Gate.io', fullName: 'Gate.io', icon: '🔵', color: '#2354E6' },
-    { id: 'bitget', name: 'Bitget', fullName: 'Bitget', icon: '🟢', color: '#00C853' },
-    { id: 'mexc', name: 'MEXC', fullName: 'MEXC', icon: '🔷', color: '#1C9AEA' }
+    { id: 'binance', name: 'Binance', fullName: 'Binance', icon: '🟡', color: '#F0B90B', setupSupported: true },
+    { id: 'okx', name: 'OKX', fullName: 'OKX', icon: '⚪', color: '#121212', setupSupported: true },
+    { id: 'bybit', name: 'Bybit', fullName: 'Bybit', icon: '🟠', color: '#F7A600', setupSupported: true },
+    { id: 'gate', name: 'Gate.io', fullName: 'Gate.io', icon: '🔵', color: '#2354E6', setupSupported: true },
+    { id: 'bitget', name: 'Bitget', fullName: 'Bitget', icon: '🟢', color: '#00C853', setupSupported: true },
+    { id: 'mexc', name: 'MEXC', fullName: 'MEXC', icon: '🔷', color: '#1C9AEA', setupSupported: true }
 ];
 
 const ExchangeManagement = () => {
@@ -26,6 +26,8 @@ const ExchangeManagement = () => {
     const [statsLoading, setStatsLoading] = useState(false);
     const [statsData, setStatsData] = useState(null);
     const [statsError, setStatsError] = useState('');
+    const [healthMap, setHealthMap] = useState(() => new Map());
+    const [healthLoading, setHealthLoading] = useState(false);
 
     const handleDelete = (exchange) => {
         setDeleteTarget(exchange);
@@ -49,6 +51,37 @@ const ExchangeManagement = () => {
         return SUPPORTED_EXCHANGES.find(e => e.id === id) || { icon: '❓', name: '未知交易所', fullName: '未知交易所', color: '#999' };
     };
 
+    const loadHealth = async (force = false) => {
+        setHealthLoading(true);
+        try {
+            const resp = await exchangeV2API.health(force ? { force: 'true' } : {});
+            const list = Array.isArray(resp?.data) ? resp.data : [];
+            setHealthMap(new Map(list.map((it) => [it.id, it])));
+        } catch {
+            setHealthMap(new Map());
+        }
+        setHealthLoading(false);
+    };
+
+    useEffect(() => {
+        if (!loading) {
+            loadHealth(false);
+        }
+    }, [loading]);
+
+    const mergedExchanges = useMemo(() => {
+        return (exchanges || []).map((ex) => {
+            const h = healthMap.get(ex.id) || null;
+            const isConnected = (h && typeof h.is_connected === 'boolean') ? h.is_connected : null;
+            return {
+                ...ex,
+                isConnected,
+                connectionError: h?.error || null,
+                checkedAt: h?.checked_at || null,
+            };
+        });
+    }, [exchanges, healthMap]);
+
     // 添加交易所模态框
     const AddExchangeModal = ({ onClose }) => {
         const [form, setForm] = useState({
@@ -68,7 +101,7 @@ const ExchangeManagement = () => {
             }
             const selected = getExchangeInfo(form.exchange_type);
             if (!selected.setupSupported) {
-                alert('当前仅支持 Binance 的一键接入');
+                alert('该交易所暂未开放一键接入');
                 return;
             }
             setSaving(true);
@@ -209,7 +242,7 @@ const ExchangeManagement = () => {
                                 fontSize: '11px',
                                 color: 'var(--text-muted)'
                             }}>
-                                当前仅支持 Binance 一键接入，其他交易所将逐步开放。
+                                备注：一键接入会验证密钥并初始化交易对列表；如交易所/权限不足会返回明确错误。
                             </div>
                         </div>
                         <div className="card-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
@@ -484,10 +517,13 @@ const ExchangeManagement = () => {
             <div className="page-header">
                 <div>
                     <h1 className="page-title">交易所管理</h1>
-                    <p className="page-subtitle">配置和管理已连接的交易所接口</p>
+                    <p className="page-subtitle">配置和管理交易所接口（连接状态以真实检测为准）</p>
                 </div>
                 <div style={{ display: 'flex', gap: '12px' }}>
                     <button onClick={refresh} className="btn btn-secondary">🔄 刷新</button>
+                    <button onClick={() => loadHealth(true)} className="btn btn-secondary" disabled={healthLoading}>
+                        {healthLoading ? '检测中...' : '🔌 检测连接'}
+                    </button>
                     <button onClick={() => setShowAddModal(true)} className="btn btn-primary">➕ 添加交易所</button>
                 </div>
             </div>
@@ -509,23 +545,27 @@ const ExchangeManagement = () => {
             </div>
 
             {/* 交易所表格 */}
-            {exchanges.length > 0 ? (
+            {mergedExchanges.length > 0 ? (
                 <div className="data-table-container">
                     <table className="data-table">
                         <thead>
                             <tr>
                                 <th>交易所</th>
                                 <th>状态</th>
+                                <th>真实连接</th>
                                 <th>创建时间</th>
                                 <th style={{ width: '190px' }}>操作</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {exchanges.map(exchange => {
+                            {mergedExchanges.map(exchange => {
                                 const info = getExchangeInfo(exchange.exchange_id);
                                 const isDeleted = !!exchange.deleted_at;
                                 const statusLabel = isDeleted ? '● 已删除' : (exchange.is_active ? '● 已启用' : '○ 已停用');
                                 const statusClass = isDeleted ? 'neutral' : (exchange.is_active ? 'success' : 'neutral');
+                                const conn = exchange.isConnected;
+                                const connLabel = conn === true ? '🟢 已连通' : conn === false ? '🔴 未连通' : '⚪ 未检测';
+                                const connHint = exchange.connectionError ? `原因: ${exchange.connectionError}` : '';
                                 return (
                                     <tr key={exchange.id}>
                                         <td>
@@ -545,6 +585,11 @@ const ExchangeManagement = () => {
                                         <td>
                                             <span className={`table-badge ${statusClass}`}>
                                                 {statusLabel}
+                                            </span>
+                                        </td>
+                                        <td style={{ fontSize: '12px' }} title={connHint}>
+                                            <span className={`table-badge ${conn === true ? 'success' : conn === false ? 'danger' : 'neutral'}`}>
+                                                {connLabel}
                                             </span>
                                         </td>
                                         <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>

@@ -6,9 +6,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import UUID
+import asyncio
+import json
+import time
 
 from ..services.exchange_service import ExchangeService
-from ..db import get_pg_pool
+from ..db import get_pg_pool, get_redis
 from ..auth import CurrentUser, get_current_user
 from ..exchange.ccxt_exchange import CCXTExchange
 
@@ -38,6 +41,177 @@ class ExchangePairUpdate(BaseModel):
     """交易对启用状态更新"""
     trading_pair_id: UUID
     is_enabled: bool
+
+
+async def _fetch_exchange_with_keys(*, exchange_id: UUID, user_id: UUID) -> Optional[dict]:
+    """
+    读取交易所配置并尽量解密密钥字段（兼容明文/不可解密情况）。
+    返回 dict: { id, exchange_id, display_name, is_active, deleted_at, api_key, api_secret, passphrase }
+    """
+    pool = await get_pg_pool()
+
+    async def _fetch(use_decrypt: bool) -> Optional[dict]:
+        async with pool.acquire() as conn:
+            if use_decrypt:
+                row = await conn.fetchrow(
+                    """
+                    SELECT
+                        id,
+                        exchange_id,
+                        display_name,
+                        is_active,
+                        deleted_at,
+                        CASE
+                            WHEN api_key_encrypted LIKE '\\x%' THEN pgp_sym_decrypt(decode(substr(api_key_encrypted, 3), 'hex'), 'inarbit_secret_key')
+                            ELSE api_key_encrypted
+                        END AS api_key,
+                        CASE
+                            WHEN api_secret_encrypted LIKE '\\x%' THEN pgp_sym_decrypt(decode(substr(api_secret_encrypted, 3), 'hex'), 'inarbit_secret_key')
+                            ELSE api_secret_encrypted
+                        END AS api_secret,
+                        CASE
+                            WHEN passphrase_encrypted LIKE '\\x%' THEN pgp_sym_decrypt(decode(substr(passphrase_encrypted, 3), 'hex'), 'inarbit_secret_key')
+                            ELSE passphrase_encrypted
+                        END AS passphrase
+                    FROM exchange_configs
+                    WHERE id = $1 AND user_id = $2
+                    """,
+                    exchange_id,
+                    user_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    SELECT
+                        id,
+                        exchange_id,
+                        display_name,
+                        is_active,
+                        deleted_at,
+                        api_key_encrypted AS api_key,
+                        api_secret_encrypted AS api_secret,
+                        passphrase_encrypted AS passphrase
+                    FROM exchange_configs
+                    WHERE id = $1 AND user_id = $2
+                    """,
+                    exchange_id,
+                    user_id,
+                )
+        return dict(row) if row else None
+
+    try:
+        return await _fetch(True)
+    except Exception:
+        return await _fetch(False)
+
+
+@router.get("/health")
+async def get_exchange_health(
+    force: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """
+    批量检测交易所“真实连接状态”（使用密钥执行一次轻量鉴权请求）。
+    - 为避免频繁打交易所接口，默认使用 Redis 缓存（约 30s）
+    - force=true 可强制刷新
+    """
+    pool = await get_pg_pool()
+    redis = await get_redis()
+
+    rows = await pool.fetch(
+        """
+        SELECT id, exchange_id, display_name, is_active, deleted_at, created_at, updated_at
+        FROM exchange_configs
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        """,
+        user.id,
+    )
+    items = []
+
+    for r in rows or []:
+        ex_id: UUID = r["id"]
+        ex_code = r["exchange_id"]
+        cache_key = f"exchange:health:{user.id}:{ex_id}"
+
+        cached_raw = None if force else await redis.get(cache_key)
+        if cached_raw:
+            try:
+                if isinstance(cached_raw, (bytes, bytearray)):
+                    cached_raw = cached_raw.decode("utf-8", errors="ignore")
+                cached = json.loads(cached_raw) if isinstance(cached_raw, str) else {}
+                items.append(
+                    {
+                        "id": str(ex_id),
+                        "exchange_id": ex_code,
+                        "display_name": r.get("display_name"),
+                        "is_active": bool(r.get("is_active")),
+                        "deleted_at": r.get("deleted_at"),
+                        "is_connected": cached.get("is_connected"),
+                        "checked_at": cached.get("checked_at"),
+                        "error": cached.get("error"),
+                        "cached": True,
+                    }
+                )
+                continue
+            except Exception:
+                pass
+
+        # 默认不可用场景
+        checked_at = int(time.time())
+        is_connected: Optional[bool] = None
+        err: Optional[str] = None
+
+        try:
+            if r.get("deleted_at") or (not r.get("is_active")):
+                is_connected = False
+                err = "exchange_inactive_or_deleted"
+            else:
+                cfg = await _fetch_exchange_with_keys(exchange_id=ex_id, user_id=user.id)
+                if not cfg:
+                    is_connected = False
+                    err = "exchange_not_found"
+                else:
+                    api_key = cfg.get("api_key")
+                    api_secret = cfg.get("api_secret")
+                    passphrase = cfg.get("passphrase")
+                    if not api_key or not api_secret:
+                        is_connected = False
+                        err = "missing_api_keys"
+                    else:
+                        client = CCXTExchange(ex_code, api_key=api_key, secret=api_secret, password=passphrase)
+                        try:
+                            await asyncio.wait_for(client.fetch_balance(), timeout=12.0)
+                            is_connected = True
+                        finally:
+                            await client.close()
+        except Exception as e:
+            is_connected = False
+            err = str(e)
+            if len(err) > 240:
+                err = err[:240] + "..."
+
+        payload = {"is_connected": is_connected, "checked_at": checked_at, "error": err}
+        try:
+            await redis.set(cache_key, json.dumps(payload, ensure_ascii=False), ex=30)
+        except Exception:
+            pass
+
+        items.append(
+            {
+                "id": str(ex_id),
+                "exchange_id": ex_code,
+                "display_name": r.get("display_name"),
+                "is_active": bool(r.get("is_active")),
+                "deleted_at": r.get("deleted_at"),
+                "is_connected": is_connected,
+                "checked_at": checked_at,
+                "error": err,
+                "cached": False,
+            }
+        )
+
+    return {"success": True, "data": items, "count": len(items)}
 
 
 # ============================================

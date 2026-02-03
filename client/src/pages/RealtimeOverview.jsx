@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { systemAPI, statsAPI } from '../api/client';
+import { configAPI, exchangeV2API, omsAPI, systemAPI } from '../api/client';
 
 const formatMoney = (value, currency = 'USDT') => {
     const num = Number(value || 0);
@@ -9,8 +9,9 @@ const formatMoney = (value, currency = 'USDT') => {
 
 const RealtimeOverview = () => {
     const [payload, setPayload] = useState(null);
-    const [stats, setStats] = useState(null);
-    const [trades, setTrades] = useState([]);
+    const [simPortfolio, setSimPortfolio] = useState(null);
+    const [omsSummary, setOmsSummary] = useState(null);
+    const [exchangeHealth, setExchangeHealth] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [tick, setTick] = useState(Date.now());
@@ -47,73 +48,79 @@ const RealtimeOverview = () => {
         };
     }, []);
 
-    // 加载运行统计数据
+    // 加载模拟盘权益口径（统一 SimulationConfig/Portfolio/RealtimeOverview）
     useEffect(() => {
-        const fetchStats = async () => {
+        let active = true;
+
+        const loadPortfolio = async () => {
             try {
-                const res = await statsAPI.realtime();
-                if (res.success) {
-                    setStats(res.data);
-                }
-            } catch (error) {
-                console.error('获取统计数据失败:', error);
+                const res = await configAPI.getSimulationPortfolio();
+                if (!active) return;
+                setSimPortfolio(res?.data || null);
+            } catch {
+                if (!active) return;
             }
         };
 
-        const fetchTrades = async () => {
+        const loadOms = async () => {
             try {
-                const res = await statsAPI.recentTrades(20);
-                if (res.success) {
-                    setTrades(res.data);
-                }
-            } catch (error) {
-                console.error('获取交易记录失败:', error);
+                const res = await omsAPI.getPnLSummary({ trading_mode: 'paper' });
+                if (!active) return;
+                setOmsSummary(res?.summary ?? res ?? null);
+            } catch {
+                if (!active) return;
+                setOmsSummary(null);
             }
         };
 
-        fetchStats();
-        fetchTrades();
-        
-        const statsInterval = setInterval(fetchStats, 3000);
-        const tradesInterval = setInterval(fetchTrades, 5000);
+        const loadExchangeHealth = async () => {
+            try {
+                const res = await exchangeV2API.health();
+                if (!active) return;
+                setExchangeHealth(Array.isArray(res?.data) ? res.data : []);
+            } catch {
+                if (!active) return;
+                setExchangeHealth([]);
+            }
+        };
+
+        loadPortfolio();
+        loadOms();
+        loadExchangeHealth();
+
+        const t1 = setInterval(loadPortfolio, 5000);
+        const t2 = setInterval(loadOms, 8000);
+        const t3 = setInterval(loadExchangeHealth, 15000);
 
         return () => {
-            clearInterval(statsInterval);
-            clearInterval(tradesInterval);
+            active = false;
+            clearInterval(t1);
+            clearInterval(t2);
+            clearInterval(t3);
         };
     }, []);
 
     const summary = payload?.summary || {};
     const currentTime = new Date(tick);
     
-    // 优先使用stats数据，回退到summary数据
-    const runtime = stats?.runtime || { hours: 0, minutes: 0, seconds: 0 };
-    const tradingMode = stats?.trading_mode || summary.trading_mode || '无';
-    const botStatus = stats?.bot_status || summary.bot_status || 'stopped';
-    const initialBalance = stats?.initial_balance ?? Number(summary.initial_capital || 1000);
-    const currentBalance = stats?.current_balance ?? Number(summary.current_balance || 1000);
-    const netProfit = stats?.net_profit ?? Number(summary.net_profit || 0);
-    const activeStrategies = stats?.active_strategies?.filter(s => s && s !== '无') || summary.strategies || [];
-    const activeExchanges = stats?.active_exchanges?.filter(e => e && e !== '无') || summary.exchanges || [];
-    const tradingPairs = stats?.trading_pairs?.filter(p => p && p !== '无') || summary.pairs || [];
+    const simSummary = simPortfolio?.summary || {};
+    const quoteCurrency = simSummary.quoteCurrency || 'USDT';
+    const initialBalance = Number(simSummary.initialCapital ?? summary.initial_capital ?? 1000);
+    const totalEquity = Number(simSummary.totalEquity ?? initialBalance);
+    const cashBalance = Number(simSummary.currentBalance ?? initialBalance);
+    const positionsValue = Number(simSummary.totalValue ?? 0);
+    const unrealizedPnL = Number(simSummary.unrealizedPnL ?? 0);
+    const realizedPnL = Number(simSummary.realizedPnL ?? 0);
+    const netProfit = totalEquity - initialBalance;
 
-    // 收益曲线数据（优先使用stats，回退到payload）
-    const profitHistory = stats?.profit_history || [];
-    const profitCurve = Array.isArray(payload?.profit_curve) ? payload.profit_curve : [];
-    const chartData = profitHistory.length > 0 
-        ? profitHistory.map(item => ({
-            time: new Date(item.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-            balance: item.balance,
-            profit: item.balance - initialBalance
-          }))
-        : profitCurve.map((pt) => {
-            const ts = pt.timestamp ? new Date(pt.timestamp) : new Date();
-            const label = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-            return { time: label, balance: Number(pt.value || 0), profit: Number(pt.value || 0) - initialBalance };
-          });
+    const tradingMode = summary.trading_mode || 'paper';
+    const botStatus = summary.bot_status || 'stopped';
+    const activeStrategies = Array.isArray(summary.strategies) ? summary.strategies : [];
 
-    // 交易记录（优先使用trades，回退到payload）
-    const tradeList = trades.length > 0 ? trades : (Array.isArray(payload?.trades) ? payload.trades : []);
+    const connectedExchangeCodes = exchangeHealth
+        .filter((h) => h && h.is_connected === true)
+        .map((h) => String(h.exchange_id || '').toUpperCase())
+        .filter(Boolean);
 
     if (loading) {
         return (
@@ -154,9 +161,9 @@ const RealtimeOverview = () => {
                     </div>
                 </div>
                 <div className="stat-box">
-                    <div className="stat-label">机器人已运行</div>
-                    <div className="stat-num" style={{ fontSize: '13px' }}>
-                        {runtime.hours}小时{runtime.minutes}分{runtime.seconds}秒
+                    <div className="stat-label">机器人状态</div>
+                    <div className="stat-num" style={{ fontSize: '12px' }}>
+                        {botStatus === 'running' ? '🟢 运行中' : botStatus === 'stopped' ? '🔴 已停止' : botStatus || '无'}
                     </div>
                 </div>
                 <div className="stat-box">
@@ -168,22 +175,22 @@ const RealtimeOverview = () => {
                 <div className="stat-box">
                     <div className="stat-label">初始资金</div>
                     <div className="stat-num" style={{ fontSize: '13px' }}>
-                        {formatMoney(initialBalance)}
+                        {formatMoney(initialBalance, quoteCurrency)}
                     </div>
                 </div>
             </div>
 
             <div className="stats-row" style={{ marginBottom: '16px' }}>
                 <div className="stat-box">
-                    <div className="stat-label">当前资金</div>
+                    <div className="stat-label">总权益（模拟盘）</div>
                     <div className="stat-num" style={{ fontSize: '13px' }}>
-                        {formatMoney(currentBalance)}
+                        {formatMoney(totalEquity, quoteCurrency)}
                     </div>
                 </div>
                 <div className="stat-box">
-                    <div className="stat-label">净利润</div>
+                    <div className="stat-label">权益变化</div>
                     <div className="stat-num" style={{ fontSize: '13px', color: netProfit >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>
-                        {netProfit >= 0 ? '+' : ''}{formatMoney(Math.abs(netProfit))}
+                        {netProfit >= 0 ? '+' : ''}{formatMoney(Math.abs(netProfit), quoteCurrency)}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         收益率: {initialBalance > 0 ? ((netProfit / initialBalance) * 100).toFixed(2) : 0}%
@@ -196,118 +203,47 @@ const RealtimeOverview = () => {
                     </div>
                 </div>
                 <div className="stat-box">
-                    <div className="stat-label">登录交易所</div>
+                    <div className="stat-label">已连通交易所</div>
                     <div className="stat-num" style={{ fontSize: '11px', lineHeight: '1.4' }}>
-                        {activeExchanges.length > 0 ? activeExchanges.map(e => e.toUpperCase()).join(' / ') : '无'}
+                        {connectedExchangeCodes.length > 0 ? connectedExchangeCodes.join(' / ') : '无'}
                     </div>
                 </div>
             </div>
 
             <div className="stats-row" style={{ marginBottom: '16px' }}>
-                <div className="stat-box" style={{ gridColumn: 'span 2' }}>
-                    <div className="stat-label">交易币对选择</div>
-                    <div className="stat-num" style={{ fontSize: '11px', lineHeight: '1.4' }}>
-                        {tradingPairs.length > 0 ? tradingPairs.slice(0, 10).join(', ') : '无'}
-                    </div>
-                </div>
                 <div className="stat-box">
-                    <div className="stat-label">机器人状态</div>
+                    <div className="stat-label">现金余额</div>
                     <div className="stat-num" style={{ fontSize: '12px' }}>
-                        {botStatus === 'running' ? '🟢 运行中' : botStatus === 'stopped' ? '🔴 已停止' : botStatus || '无'}
+                        {formatMoney(cashBalance, quoteCurrency)}
+                    </div>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        说明：此处为模拟盘现金（可能包含对冲/卖出所得），并非总权益
                     </div>
                 </div>
                 <div className="stat-box">
-                    <div className="stat-label">数据刷新</div>
-                    <div className="stat-num" style={{ fontSize: '11px' }}>
-                        {payload?.last_refresh ? new Date(payload.last_refresh * 1000).toLocaleTimeString('zh-CN') : '实时'}
+                    <div className="stat-label">仓位估值</div>
+                    <div className="stat-num" style={{ fontSize: '12px' }}>
+                        {formatMoney(positionsValue, quoteCurrency)}
+                    </div>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        未实现盈亏: {unrealizedPnL >= 0 ? '+' : ''}{formatMoney(Math.abs(unrealizedPnL), quoteCurrency)}
+                        ，已实现盈亏: {realizedPnL >= 0 ? '+' : ''}{formatMoney(Math.abs(realizedPnL), quoteCurrency)}
+                    </div>
+                </div>
+                <div className="stat-box">
+                    <div className="stat-label">OMS 累计收益（模拟）</div>
+                    <div className="stat-num" style={{ fontSize: '12px' }}>
+                        {omsSummary ? `${Number(omsSummary.total_profit || 0) >= 0 ? '+' : ''}${Number(omsSummary.total_profit || 0).toFixed(4)} USDT` : '—'}
+                    </div>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        交易次数: {omsSummary ? Number(omsSummary.total_orders || 0) : '—'}，胜率: {omsSummary ? `${(Number(omsSummary.win_rate || 0) * 100).toFixed(2)}%` : '—'}
                     </div>
                 </div>
             </div>
 
-            {/* 实时收益曲线图 */}
-            <div className="stat-box" style={{ height: '320px', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '11px', marginBottom: '10px', fontWeight: 500 }}>
-                    实时收益曲线
-                </h3>
-                {chartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="90%">
-                        <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                            <XAxis dataKey="time" tick={{ fontSize: 9 }} stroke="var(--text-muted)" />
-                            <YAxis tick={{ fontSize: 9 }} stroke="var(--text-muted)" />
-                            <Tooltip contentStyle={{ backgroundColor: 'var(--base3)', border: '1px solid var(--border-subtle)', fontSize: '10px' }} />
-                            <Legend />
-                            <Line type="monotone" dataKey="balance" name="总资金 (USDT)" stroke="var(--cyan)" strokeWidth={2} dot={{ r: 2 }} />
-                            <Line type="monotone" dataKey="profit" name="利润 (USDT)" stroke="var(--green)" strokeWidth={2} dot={{ r: 2 }} />
-                        </LineChart>
-                    </ResponsiveContainer>
-                ) : (
-                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '10px', marginTop: '60px' }}>
-                        暂无收益曲线数据
-                    </div>
-                )}
-            </div>
-
-            {/* 实时买入卖出信息 */}
-            <div className="stat-box">
-                <h3 style={{ fontSize: '11px', marginBottom: '10px', fontWeight: 500 }}>实时买入卖出信息</h3>
-                <div className="data-table-container">
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th>时间</th>
-                                <th>类型</th>
-                                <th>方向</th>
-                                <th>交易对</th>
-                                <th>价格</th>
-                                <th>数量</th>
-                                <th>收益</th>
-                                <th>交易所</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {tradeList.map((trade, idx) => {
-                                const tradeTime = trade.timestamp ? new Date(trade.timestamp) : (trade.time ? new Date(trade.time) : new Date());
-                                const sideLabel = trade.side === 'buy' ? '买入' : trade.side === 'sell' ? '卖出' : '无';
-                                const sideColor = trade.side === 'buy' ? 'var(--color-profit)' : trade.side === 'sell' ? 'var(--color-loss)' : 'var(--text-muted)';
-                                const profitValue = trade.profit || 0;
-                                const profitColor = profitValue >= 0 ? 'var(--color-profit)' : 'var(--color-loss)';
-                                
-                                return (
-                                    <tr key={`${trade.timestamp || trade.time}-${idx}`}>
-                                        <td style={{ fontSize: '10px' }}>{tradeTime.toLocaleTimeString('zh-CN')}</td>
-                                        <td style={{ fontSize: '10px' }}>
-                                            <span style={{ 
-                                                padding: '2px 6px', 
-                                                borderRadius: '3px',
-                                                background: trade.type === 'buy' ? 'rgba(0,200,100,0.1)' : 'rgba(200,0,0,0.1)',
-                                                color: sideColor,
-                                                fontWeight: '500'
-                                            }}>
-                                                {trade.type === 'buy' ? '买' : trade.type === 'sell' ? '卖' : '-'}
-                                            </span>
-                                        </td>
-                                        <td style={{ fontSize: '10px', color: sideColor }}>{sideLabel}</td>
-                                        <td style={{ fontSize: '10px', fontFamily: 'monospace' }}>{trade.symbol || '无'}</td>
-                                        <td style={{ fontSize: '10px', fontFamily: 'monospace' }}>{trade.price ? trade.price.toFixed(4) : '0.0000'}</td>
-                                        <td style={{ fontSize: '10px', fontFamily: 'monospace' }}>{trade.amount ? trade.amount.toFixed(6) : '0.000000'}</td>
-                                        <td style={{ fontSize: '10px', fontFamily: 'monospace', color: profitColor, fontWeight: '500' }}>
-                                            {profitValue >= 0 ? '+' : ''}{profitValue.toFixed(2)}
-                                        </td>
-                                        <td style={{ fontSize: '10px' }}>{trade.exchange || '无'}</td>
-                                    </tr>
-                                );
-                            })}
-                            {!tradeList.length && (
-                                <tr>
-                                    <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '10px' }}>
-                                        暂无实时买入卖出信息
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+            {/* 去重说明 */}
+            <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0,0,0,0.02)', borderRadius: '6px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                <strong>说明：</strong> 本页以“模拟持仓/模拟配置”同一口径展示模拟盘总权益；交易明细与收益曲线请在“收益展示”页查看，避免重复。
             </div>
         </div>
     );

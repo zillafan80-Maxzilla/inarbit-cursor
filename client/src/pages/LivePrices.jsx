@@ -71,7 +71,10 @@ const LivePrices = () => {
         })}`;
     };
 
-    // 当前选中的币种（每个交易所独立）
+    // 选中的交易所（全局）
+    const [selectedExchangeId, setSelectedExchangeId] = useState('');
+
+    // 当前选中的币种（按交易所分别记忆）
     const [selectedCoins, setSelectedCoins] = useState({});
 
     // 调试信息开关（取数与曲线对比）
@@ -124,6 +127,23 @@ const LivePrices = () => {
 
     const enabledExchanges = useMemo(() => (exchanges || []), [exchanges]);
 
+    const selectedExchange = useMemo(() => {
+        if (!enabledExchanges.length) return null;
+        if (selectedExchangeId && enabledExchanges.some((e) => (e.exchange_id || e.id) === selectedExchangeId)) {
+            return enabledExchanges.find((e) => (e.exchange_id || e.id) === selectedExchangeId) || null;
+        }
+        return enabledExchanges[0] || null;
+    }, [enabledExchanges, selectedExchangeId]);
+
+    useEffect(() => {
+        if (!enabledExchanges.length) return;
+        // 初始化默认选中交易所
+        const firstId = (enabledExchanges[0].exchange_id || enabledExchanges[0].id || '');
+        if (!selectedExchangeId && firstId) {
+            setSelectedExchangeId(firstId);
+        }
+    }, [enabledExchanges, selectedExchangeId]);
+
     const normalizedTickersByExchange = useMemo(() => {
         const map = {};
         for (const ex of enabledExchanges) {
@@ -167,7 +187,7 @@ const LivePrices = () => {
         if (!enabledExchanges.length) return;
         // eslint 规则禁止在 effect 内同步触发 setState 链式更新
         const t = setTimeout(() => {
-            setSelectedCoins(prev => {
+            setSelectedCoins((prev) => {
                 const next = { ...prev };
                 for (const ex of enabledExchanges) {
                     const exchangeId = ex.exchange_id || ex.id;
@@ -176,7 +196,7 @@ const LivePrices = () => {
                 }
                 return next;
             });
-            setTimePeriods(prev => {
+            setTimePeriods((prev) => {
                 const next = { ...prev };
                 for (const ex of enabledExchanges) {
                     const exchangeId = ex.exchange_id || ex.id;
@@ -194,13 +214,15 @@ const LivePrices = () => {
         let cancelled = false;
 
         const loadOhlcv = async () => {
-            for (const ex of enabledExchanges) {
-                const exchangeId = ex.exchange_id || ex.id;
-                if (!exchangeId) continue;
-                const availableCoins = coinsByExchange[exchangeId] || defaultCoins;
-                const currentCoin = selectedCoins[exchangeId] || availableCoins[0] || 'BTC';
-                const period = timePeriods[exchangeId] || '1D';
-                const tickers = normalizedTickersByExchange[exchangeId] || {};
+            // 仅对当前选中交易所加载 OHLCV（避免多交易所并发导致接口压力与噪声）
+            const ex = selectedExchange;
+            const exchangeId = ex?.exchange_id || ex?.id;
+            if (!exchangeId) return;
+
+            const availableCoins = coinsByExchange[exchangeId] || defaultCoins;
+            const currentCoin = selectedCoins[exchangeId] || availableCoins[0] || 'BTC';
+            const period = timePeriods[exchangeId] || '1D';
+            const tickers = normalizedTickersByExchange[exchangeId] || {};
                 const availableQuotes = Object.keys(tickers)
                     .map((s) => parseSymbol(s))
                     .filter((p) => p && p.base === currentCoin)
@@ -209,7 +231,7 @@ const LivePrices = () => {
                 const symbol = `${currentCoin}/${quote}`;
                 const timeframe = getTimeframe(period);
                 const cacheKey = `${exchangeId}|${symbol}|${timeframe}`;
-                if (ohlcvCache[cacheKey]) continue;
+                if (ohlcvCache[cacheKey]) return;
 
                 try {
                     const resp = await marketAPI.getOHLCV({
@@ -224,12 +246,11 @@ const LivePrices = () => {
                 } catch {
                     if (cancelled) return;
                 }
-            }
         };
 
         loadOhlcv();
         return () => { cancelled = true; };
-    }, [enabledExchanges, selectedCoins, timePeriods, coinsByExchange, normalizedTickersByExchange]);
+    }, [enabledExchanges, selectedExchange, selectedCoins, timePeriods, coinsByExchange, normalizedTickersByExchange, ohlcvCache]);
 
     useEffect(() => {
         if (!enabledExchanges.length) return;
@@ -300,9 +321,39 @@ const LivePrices = () => {
                 </div>
             </div>
 
-            {/* 交易所卡片 */}
+            {/* 交易所选择（上方菜单） */}
+            <div className="stat-box" style={{ padding: '12px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>交易所</div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {enabledExchanges.map((exchange) => {
+                            const exchangeId = exchange.exchange_id || exchange.id;
+                            const active = exchangeId === (selectedExchange?.exchange_id || selectedExchange?.id);
+                            return (
+                                <button
+                                    key={exchangeId}
+                                    onClick={() => setSelectedExchangeId(exchangeId)}
+                                    className={`btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                                    title={exchange.connectionError ? `连接异常：${exchange.connectionError}` : ''}
+                                >
+                                    <span>{exchange.icon}</span>
+                                    <span>{exchange.name}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+                {selectedExchange && (
+                    <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                        当前：{selectedExchange.name}（{selectedExchange.isConnected === true ? '🟢已连通' : selectedExchange.isConnected === false ? '🔴未连通' : '⚪未检测'}）
+                    </div>
+                )}
+            </div>
+
+            {/* 当前交易所行情卡片 */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {enabledExchanges.map(exchange => {
+                {(selectedExchange ? [selectedExchange] : []).map(exchange => {
                     const exchangeId = exchange.exchange_id || exchange.id;
                     const availableCoins = coinsByExchange[exchangeId] || defaultCoins;
                     const currentCoin = selectedCoins[exchangeId] || availableCoins[0] || 'BTC';
@@ -361,16 +412,16 @@ const LivePrices = () => {
                                 <span style={{
                                     marginLeft: 'auto',
                                     fontSize: '10px',
-                                    color: 'var(--color-success)',
+                                    color: exchange.isConnected === false ? 'var(--color-danger)' : 'var(--color-success)',
                                     padding: '3px 8px',
-                                    background: 'rgba(133, 153, 0, 0.1)',
+                                    background: exchange.isConnected === false ? 'rgba(220, 50, 47, 0.1)' : 'rgba(133, 153, 0, 0.1)',
                                     borderRadius: '10px'
                                 }}>
-                                    ● 已连接
+                                    ● {exchange.isConnected === false ? '未连通' : exchange.isConnected === true ? '已连通' : '未检测'}
                                 </span>
                             </div>
 
-                            {/* 第二行：虚拟币对浮影按钮 */}
+                            {/* 第二行：虚拟币选择（下方按钮） */}
                             <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
                                 {availableCoins.map(coin => (
                                     <button

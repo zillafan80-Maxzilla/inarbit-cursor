@@ -333,14 +333,20 @@ class ConfigService:
                     )
 
         if not pairs:
-            fallback = []
-            for p in DEFAULT_PAIRS:
-                if p.supported_exchanges and exchange_id not in p.supported_exchanges:
-                    continue
-                if enabled_only and not p.is_active:
-                    continue
-                fallback.append(p)
-            pairs = fallback
+            # 如果交易所配置已存在（即用户已接入/创建过该交易所），就不要用默认交易对制造“看似存在币对”的假象
+            try:
+                ex = await self.get_exchange(exchange_id, user_id=user_id)
+            except Exception:
+                ex = None
+            if ex is None:
+                fallback = []
+                for p in DEFAULT_PAIRS:
+                    if p.supported_exchanges and exchange_id not in p.supported_exchanges:
+                        continue
+                    if enabled_only and not p.is_active:
+                        continue
+                    fallback.append(p)
+                pairs = fallback
 
         self._cache_set(cache_key, pairs)
         return pairs

@@ -111,6 +111,10 @@ export const exchangeAPI = {
 
 export const exchangeV2API = {
     list: () => fetchAPI('/exchanges', { baseUrl: '/api/v2' }),
+    health: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchAPI(`/exchanges/health${query ? '?' + query : ''}`, { baseUrl: '/api/v2', timeoutMs: 60000 });
+    },
     setup: (payload) => fetchAPI('/exchanges/setup', {
         method: 'POST',
         body: JSON.stringify(payload),

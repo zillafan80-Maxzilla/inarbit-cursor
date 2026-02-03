@@ -107,7 +107,8 @@ export function useConnectedExchanges() {
                 icon: style.icon || '🔵',
                 bgColor: style.bgColor || 'rgba(0,0,0,0.06)',
                 borderColor: style.borderColor || '#666666',
-                isConnected: true,
+                // 未经真实检测时，先标记为未知
+                isConnected: null,
                 isSpotEnabled: true,
                 isFuturesEnabled: false,
             };
@@ -121,17 +122,33 @@ export function useConnectedExchanges() {
             setLoading(false);
         }, 15000);
         try {
-            const resp = await configAPI.getConnectedExchanges();
-            let list = Array.isArray(resp) ? resp : (resp?.data || []);
-            if (!list.length) {
-                const v2resp = await exchangeV2API.list();
-                const v2list = Array.isArray(v2resp) ? v2resp : (v2resp?.data || []);
-                const activeList = v2list.filter((item) => item.is_active && !item.deleted_at);
-                if (activeList.length) {
-                    list = normalizeFallback(activeList);
-                }
+            // 以 v2 的 exchange_configs 为准（支持 UUID + 后续健康检查）
+            const v2resp = await exchangeV2API.list();
+            const v2list = Array.isArray(v2resp) ? v2resp : (v2resp?.data || []);
+            const activeList = v2list.filter((item) => item.is_active && !item.deleted_at);
+
+            // 拉取真实连接状态（带缓存）
+            let healthMap = new Map();
+            try {
+                const healthResp = await exchangeV2API.health();
+                const healthList = Array.isArray(healthResp?.data) ? healthResp.data : [];
+                healthMap = new Map(healthList.map((h) => [h.id, h]));
+            } catch {
+                // ignore
             }
-            setExchanges(list);
+
+            const styled = normalizeFallback(activeList).map((ex) => {
+                const health = healthMap.get(ex.id) || null;
+                const isConnected = (health && typeof health.is_connected === 'boolean') ? health.is_connected : null;
+                return {
+                    ...ex,
+                    isConnected,
+                    connectionError: health?.error || null,
+                    checkedAt: health?.checked_at || null,
+                };
+            });
+
+            setExchanges(styled);
             setError(null);
         } catch (e) {
             setError(e.message);
