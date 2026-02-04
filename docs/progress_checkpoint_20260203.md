@@ -44,6 +44,11 @@
   - **总权益（模拟盘默认）**：定时采样 `simulation/portfolio.totalEquity`，曲线会随行情波动。
   - **已实现（OMS）**：按记录时间累加，避免“按天聚合导致平”的错觉。
 
+## 线上问题修复记录（便于回溯）
+- `https://inarbit.work/user` 报错 `ReferenceError: Link is not defined`
+  - 原因：`client/src/pages/UserManagement.jsx` 使用了 `<Link>` 但未从 `react-router-dom` 引入
+  - 修复：补充 `import { Link, useNavigate } from 'react-router-dom';` 并重新部署前端
+
 ## 关键文件
 - 前端
   - `client/src/App.jsx`：路由与侧边栏菜单（重命名/跳转/合并入口）
